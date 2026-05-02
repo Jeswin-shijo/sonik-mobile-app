@@ -7,6 +7,7 @@ import * as WebBrowser from 'expo-web-browser';
 import { ComponentProps, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Dimensions,
   Platform,
   Pressable,
   ScrollView,
@@ -20,6 +21,19 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 WebBrowser.maybeCompleteAuthSession();
+
+// Responsive design utilities
+const screenWidth = Dimensions.get('window').width;
+const screenHeight = Dimensions.get('window').height;
+const isSmallScreen = screenWidth < 380;
+const isMediumScreen = screenWidth >= 380 && screenWidth < 480;
+const isLargeScreen = screenWidth >= 480;
+
+const responsiveScale = (baseSize: number) => {
+  if (isSmallScreen) return baseSize * 0.85;
+  if (isMediumScreen) return baseSize * 0.92;
+  return baseSize;
+};
 
 const defaultApiBaseUrl =
   Platform.select({
@@ -1668,10 +1682,10 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   playerContent: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 210,
-    gap: 16,
+    paddingHorizontal: isSmallScreen ? 12 : 16,
+    paddingTop: isSmallScreen ? 8 : 12,
+    paddingBottom: isSmallScreen ? 200 : 210,
+    gap: isSmallScreen ? 12 : 16,
   },
   appHeader: {
     alignItems: 'center',
@@ -1699,7 +1713,7 @@ const styles = StyleSheet.create({
   },
   brandName: {
     color: '#fbf7ef',
-    fontSize: 22,
+    fontSize: isSmallScreen ? 18 : isMediumScreen ? 20 : 22,
     fontWeight: '900',
   },
   headerPill: {
@@ -1803,14 +1817,14 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     flex: 1,
     justifyContent: 'center',
-    minHeight: 42,
+    minHeight: isSmallScreen ? 38 : 42,
   },
   tabButtonActive: {
     backgroundColor: '#fbf7ef',
   },
   tabLabel: {
     color: '#b8afaa',
-    fontSize: 13,
+    fontSize: isSmallScreen ? 11 : 13,
     fontWeight: '900',
   },
   tabLabelActive: {
@@ -1903,22 +1917,27 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(248,244,236,0.11)',
     borderRadius: 8,
     borderWidth: 1,
-    gap: 16,
-    padding: 16,
+    gap: 12,
+    padding: isSmallScreen ? 12 : 16,
+    alignItems: 'center',
   },
   deckCopy: {
     gap: 8,
+    width: '100%',
+    alignItems: 'center',
   },
   trackTitle: {
     color: '#fbf7ef',
-    fontSize: 34,
+    fontSize: isSmallScreen ? 26 : isMediumScreen ? 30 : 34,
     fontWeight: '900',
-    lineHeight: 38,
+    lineHeight: isSmallScreen ? 30 : isMediumScreen ? 34 : 38,
+    textAlign: 'center',
   },
   trackArtist: {
     color: '#b8afaa',
-    fontSize: 15,
-    lineHeight: 22,
+    fontSize: isSmallScreen ? 13 : 15,
+    lineHeight: isSmallScreen ? 18 : 22,
+    textAlign: 'center',
   },
   chipRow: {
     flexDirection: 'row',
@@ -1960,12 +1979,12 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     color: '#fbf7ef',
-    fontSize: 21,
+    fontSize: isSmallScreen ? 17 : isMediumScreen ? 19 : 21,
     fontWeight: '900',
   },
   sectionAction: {
     color: '#d8d0c8',
-    fontSize: 13,
+    fontSize: isSmallScreen ? 11 : 13,
     fontWeight: '800',
   },
   mixScroller: {
@@ -2001,9 +2020,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     flexDirection: 'row',
-    gap: 10,
-    minHeight: 64,
-    paddingHorizontal: 10,
+    gap: isSmallScreen ? 8 : 10,
+    minHeight: isSmallScreen ? 56 : 64,
+    paddingHorizontal: isSmallScreen ? 8 : 10,
   },
   trackRowActive: {
     backgroundColor: 'rgba(85,214,194,0.12)',
@@ -2024,17 +2043,17 @@ const styles = StyleSheet.create({
   },
   trackName: {
     color: '#fbf7ef',
-    fontSize: 15,
+    fontSize: isSmallScreen ? 13 : 15,
     fontWeight: '900',
   },
   trackSubtext: {
     color: '#b8afaa',
-    fontSize: 12,
+    fontSize: isSmallScreen ? 11 : 12,
     marginTop: 2,
   },
   trackDuration: {
     color: '#b8afaa',
-    fontSize: 12,
+    fontSize: isSmallScreen ? 11 : 12,
     fontWeight: '800',
   },
   queueCard: {
@@ -2077,7 +2096,7 @@ const styles = StyleSheet.create({
   },
   playlistTitle: {
     color: '#fbf7ef',
-    fontSize: 16,
+    fontSize: isSmallScreen ? 14 : isMediumScreen ? 15 : 16,
     fontWeight: '900',
   },
   profileCard: {
@@ -2109,7 +2128,7 @@ const styles = StyleSheet.create({
   },
   profileName: {
     color: '#fbf7ef',
-    fontSize: 22,
+    fontSize: isSmallScreen ? 18 : isMediumScreen ? 20 : 22,
     fontWeight: '900',
   },
   statsRow: {
@@ -2235,28 +2254,28 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 18,
     borderWidth: 1,
     bottom: 0,
-    gap: 10,
+    gap: isSmallScreen ? 8 : 10,
     left: 0,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 16,
+    paddingHorizontal: isSmallScreen ? 12 : 16,
+    paddingTop: isSmallScreen ? 8 : 12,
+    paddingBottom: isSmallScreen ? 12 : 16,
     position: 'absolute',
     right: 0,
   },
   nowTrack: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 10,
+    gap: isSmallScreen ? 8 : 10,
   },
   nowTitle: {
     color: '#fbf7ef',
-    fontSize: 15,
+    fontSize: isSmallScreen ? 13 : 15,
     fontWeight: '900',
   },
   transportRow: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 18,
+    gap: isSmallScreen ? 14 : 18,
     justifyContent: 'center',
   },
   iconButton: {
@@ -2265,15 +2284,19 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(248,244,236,0.12)',
     borderRadius: 999,
     borderWidth: 1,
-    height: 44,
+    height: isSmallScreen ? 40 : 44,
     justifyContent: 'center',
-    width: 44,
+    width: isSmallScreen ? 40 : 44,
+    minHeight: 44,
+    minWidth: 44,
   },
   iconButtonSolid: {
     backgroundColor: '#f5c15d',
     borderColor: '#f5c15d',
-    height: 52,
-    width: 52,
+    height: isSmallScreen ? 48 : 52,
+    width: isSmallScreen ? 48 : 52,
+    minHeight: 44,
+    minWidth: 44,
   },
   progressMeta: {
     alignItems: 'center',
@@ -2320,18 +2343,20 @@ const styles = StyleSheet.create({
   },
   trackArtSmall: {
     borderRadius: 8,
-    height: 46,
-    width: 46,
+    height: responsiveScale(46),
+    width: responsiveScale(46),
   },
   trackArtMedium: {
     borderRadius: 8,
-    height: 92,
-    width: 92,
+    height: responsiveScale(92),
+    width: responsiveScale(92),
   },
   trackArtLarge: {
     borderRadius: 8,
-    height: 210,
-    width: 210,
+    height: isSmallScreen ? 160 : isMediumScreen ? 185 : 210,
+    width: isSmallScreen ? 160 : isMediumScreen ? 185 : 210,
+    alignSelf: 'center',
+    marginVertical: 12,
   },
   artFrame: {
     borderRadius: 24,

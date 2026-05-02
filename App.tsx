@@ -1,338 +1,61 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Google from 'expo-auth-session/providers/google';
-import { Audio, AVPlaybackStatus } from 'expo-av';
+import {
+  setAudioModeAsync,
+  useAudioPlayer,
+  useAudioPlayerStatus,
+  type AudioSource,
+} from 'expo-audio';
 import { StatusBar } from 'expo-status-bar';
 import * as WebBrowser from 'expo-web-browser';
-import { ComponentProps, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
-  Platform,
   Pressable,
   ScrollView,
-  StyleProp,
   StyleSheet,
   Text,
   TextInput,
   View,
-  ViewStyle,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { getFriendlyError, requestJson } from './src/api/client';
+import { IconButton } from './src/components/IconButton';
+import { TrackArt } from './src/components/TrackArt';
+import {
+  apiBaseUrl,
+  googleAndroidClientId,
+  googleIosClientId,
+  googleWebClientId,
+  sessionStorageKey,
+} from './src/config';
+import { fallbackTracks, mixes, waveformHeights } from './src/data/tracks';
+import type {
+  ActivePanel,
+  AuthResponse,
+  AuthView,
+  ForgotPasswordResponse,
+  MusicTrack,
+  Playlist,
+  PlaylistResponse,
+  PlaylistsResponse,
+  SessionState,
+  SessionUser,
+  TracksResponse,
+} from './src/types';
+import { formatMillis, normalizePlaylist, normalizeTrack } from './src/utils/music';
 
 WebBrowser.maybeCompleteAuthSession();
 
 // Responsive design utilities
 const screenWidth = Dimensions.get('window').width;
-const screenHeight = Dimensions.get('window').height;
 const isSmallScreen = screenWidth < 380;
 const isMediumScreen = screenWidth >= 380 && screenWidth < 480;
-const isLargeScreen = screenWidth >= 480;
-
-const responsiveScale = (baseSize: number) => {
-  if (isSmallScreen) return baseSize * 0.85;
-  if (isMediumScreen) return baseSize * 0.92;
-  return baseSize;
-};
-
-const defaultApiBaseUrl =
-  Platform.select({
-    android: 'http://10.0.2.2:4001',
-    ios: 'http://localhost:4001',
-    default: 'http://localhost:4001',
-  }) ?? 'http://localhost:4001';
-
-const apiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL ?? defaultApiBaseUrl;
-const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
-const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
-const googleAndroidClientId =
-  process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '';
-const sessionStorageKey = 'sonik.mobile.session';
-
-type AuthView = 'login' | 'register' | 'forgot' | 'reset';
-type ActivePanel = 'flow' | 'library' | 'profile';
-type CoverClass = 'neon' | 'coast' | 'velvet' | 'summer' | 'blue';
-type IconName = ComponentProps<typeof Ionicons>['name'];
-
-type SessionUser = {
-  id: number;
-  email: string;
-  profileName: string;
-  authProvider: 'local' | 'google' | 'hybrid';
-  googleConnected: boolean;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type SessionState = {
-  accessToken: string;
-  tokenType: string;
-  user: SessionUser;
-};
-
-type AuthResponse = {
-  message: string;
-  accessToken: string;
-  tokenType: string;
-  user: SessionUser;
-};
-
-type ForgotPasswordResponse = {
-  message: string;
-  devResetToken?: string;
-  expiresAt?: string;
-};
-
-type ApiErrorPayload = {
-  message?: string | string[];
-};
-
-type MusicTrack = {
-  id: string;
-  title: string;
-  artist: string;
-  album: string;
-  duration: string;
-  durationMs: number;
-  plays: string;
-  mood: string;
-  coverClass: CoverClass;
-  audio: number;
-};
-
-type Playlist = {
-  id: string;
-  name: string;
-  trackIds: string[];
-};
-
-class ApiRequestError extends Error {
-  status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.name = 'ApiRequestError';
-    this.status = status;
-  }
-}
-
-const tracks: MusicTrack[] = [
-  {
-    id: 'neon-afterhours',
-    title: 'Neon Afterhours',
-    artist: 'Mira Sol',
-    album: 'City Lines',
-    duration: '0:24',
-    durationMs: 24_000,
-    plays: '2.4M',
-    mood: 'Late night',
-    coverClass: 'neon',
-    audio: require('./assets/audio/neon-afterhours.wav'),
-  },
-  {
-    id: 'coastal-static',
-    title: 'Coastal Static',
-    artist: 'North Pier',
-    album: 'Low Tide Radio',
-    duration: '0:24',
-    durationMs: 24_000,
-    plays: '986K',
-    mood: 'Focus',
-    coverClass: 'coast',
-    audio: require('./assets/audio/coastal-static.wav'),
-  },
-  {
-    id: 'velvet-signal',
-    title: 'Velvet Signal',
-    artist: 'Juno Ray',
-    album: 'Soft Machines',
-    duration: '0:24',
-    durationMs: 24_000,
-    plays: '1.1M',
-    mood: 'Groove',
-    coverClass: 'velvet',
-    audio: require('./assets/audio/velvet-signal.wav'),
-  },
-  {
-    id: 'summer-loop',
-    title: 'Summer Loop',
-    artist: 'The Halcyon Room',
-    album: 'Warm Start',
-    duration: '0:24',
-    durationMs: 24_000,
-    plays: '742K',
-    mood: 'Bright',
-    coverClass: 'summer',
-    audio: require('./assets/audio/summer-loop.wav'),
-  },
-  {
-    id: 'blue-hour-drive',
-    title: 'Blue Hour Drive',
-    artist: 'Cassian Vale',
-    album: 'Second Avenue',
-    duration: '0:24',
-    durationMs: 24_000,
-    plays: '1.8M',
-    mood: 'Drive',
-    coverClass: 'blue',
-    audio: require('./assets/audio/blue-hour-drive.wav'),
-  },
-];
-
-const mixes = [
-  {
-    title: 'Signal Blend',
-    detail: 'A warm run of electronic, pop, and indie picks.',
-    coverClass: 'summer' as CoverClass,
-  },
-  {
-    title: 'Night Current',
-    detail: 'Lower light, deeper bass, smoother transitions.',
-    coverClass: 'velvet' as CoverClass,
-  },
-  {
-    title: 'Focus Crate',
-    detail: 'Steady tracks for shipping work without friction.',
-    coverClass: 'coast' as CoverClass,
-  },
-];
-
-const waveformHeights = [
-  32, 58, 46, 74, 38, 82, 50, 66, 42, 88, 56, 70, 36, 64, 92, 48, 78, 40,
-];
-
-const coverPalettes: Record<CoverClass, { base: string; accent: string }> = {
-  neon: { base: '#5334b8', accent: '#ff5a7a' },
-  coast: { base: '#214d83', accent: '#55d6c2' },
-  velvet: { base: '#5b367f', accent: '#c6537b' },
-  summer: { base: '#9b4f2f', accent: '#f5c15d' },
-  blue: { base: '#235d72', accent: '#65a8ff' },
-};
-
-async function requestJson<T>(path: string, init?: RequestInit) {
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  });
-
-  const payload = (await response.json().catch(() => null)) as
-    | T
-    | ApiErrorPayload
-    | null;
-
-  if (!response.ok) {
-    const payloadMessage = (payload as ApiErrorPayload | null)?.message;
-    const message = Array.isArray(payloadMessage)
-      ? payloadMessage.join(', ')
-      : payloadMessage;
-
-    throw new ApiRequestError(response.status, message || 'Request failed.');
-  }
-
-  return payload as T;
-}
-
-function getFriendlyError(error: unknown, view: AuthView) {
-  if (error instanceof ApiRequestError) {
-    if (error.status === 401) {
-      return view === 'login'
-        ? 'Email or password did not match.'
-        : 'Please sign in again to continue.';
-    }
-
-    if (error.status === 409) {
-      return 'An account with this email already exists.';
-    }
-
-    if (error.status === 400) {
-      return 'Please check the details and try again.';
-    }
-  }
-
-  return 'Sonik could not complete that action right now.';
-}
-
-function TrackArt({
-  track,
-  size = 'medium',
-  style,
-}: {
-  track: Pick<MusicTrack, 'coverClass'>;
-  size?: 'small' | 'medium' | 'large';
-  style?: StyleProp<ViewStyle>;
-}) {
-  const palette = coverPalettes[track.coverClass];
-
-  return (
-    <View
-      style={[
-        styles.trackArt,
-        size === 'small'
-          ? styles.trackArtSmall
-          : size === 'large'
-            ? styles.trackArtLarge
-            : styles.trackArtMedium,
-        { backgroundColor: palette.base },
-        style,
-      ]}
-    >
-      <View style={[styles.artFrame, { borderColor: palette.accent }]} />
-      <View style={[styles.artCircle, { backgroundColor: palette.accent }]} />
-      <View style={styles.artLine} />
-    </View>
-  );
-}
-
-function IconButton({
-  icon,
-  label,
-  onPress,
-  variant = 'ghost',
-}: {
-  icon: IconName;
-  label: string;
-  onPress?: () => void;
-  variant?: 'ghost' | 'solid';
-}) {
-  return (
-    <Pressable
-      accessibilityLabel={label}
-      onPress={onPress}
-      style={[
-        styles.iconButton,
-        variant === 'solid' ? styles.iconButtonSolid : null,
-      ]}
-    >
-      <Ionicons
-        color={variant === 'solid' ? '#160f0b' : '#fbf7ef'}
-        name={icon}
-        size={variant === 'solid' ? 26 : 21}
-      />
-    </Pressable>
-  );
-}
-
-function formatProgress(progress: number) {
-  const seconds = Math.round((progress / 100) * 222);
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = String(seconds % 60).padStart(2, '0');
-
-  return `${minutes}:${remainingSeconds}`;
-}
-
-function formatMillis(milliseconds: number) {
-  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = String(totalSeconds % 60).padStart(2, '0');
-
-  return `${minutes}:${seconds}`;
-}
 
 export default function App() {
-  const soundRef = useRef<Audio.Sound | null>(null);
+  const completedTrackRef = useRef('');
   const [view, setView] = useState<AuthView>('login');
   const [activePanel, setActivePanel] = useState<ActivePanel>('flow');
   const [session, setSession] = useState<SessionState | null>(null);
@@ -340,31 +63,20 @@ export default function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [noticeMessage, setNoticeMessage] = useState('');
-  const [selectedTrackId, setSelectedTrackId] = useState(tracks[0].id);
-  const [isPlaying, setIsPlaying] = useState(true);
+  const [libraryTracks, setLibraryTracks] = useState<MusicTrack[]>(fallbackTracks);
+  const [favoriteTracks, setFavoriteTracks] = useState<MusicTrack[]>([]);
+  const [recentTracks, setRecentTracks] = useState<MusicTrack[]>([]);
+  const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedTrackId, setSelectedTrackId] = useState(fallbackTracks[0].id);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [soundPosition, setSoundPosition] = useState(0);
-  const [soundDuration, setSoundDuration] = useState(tracks[0].durationMs);
+  const [soundDuration, setSoundDuration] = useState(
+    fallbackTracks[0].durationMs ?? 0,
+  );
   const [progressTrackWidth, setProgressTrackWidth] = useState(1);
-  const [isSoundLoading, setIsSoundLoading] = useState(false);
-  const [volume, setVolume] = useState(76);
-  const [likedTrackIds, setLikedTrackIds] = useState<string[]>([
-    tracks[0].id,
-    tracks[2].id,
-  ]);
-  const [playlists, setPlaylists] = useState<Playlist[]>([
-    {
-      id: 'night-crate',
-      name: 'Night Crate',
-      trackIds: ['neon-afterhours', 'blue-hour-drive'],
-    },
-    {
-      id: 'focus-room',
-      name: 'Focus Room',
-      trackIds: ['coastal-static', 'velvet-signal'],
-    },
-  ]);
-  const [selectedPlaylistId, setSelectedPlaylistId] = useState('night-crate');
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState('');
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [loginForm, setLoginForm] = useState({
     email: '',
@@ -384,13 +96,25 @@ export default function App() {
     newPassword: '',
   });
 
+  const visibleTracks = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    if (!query) {
+      return libraryTracks;
+    }
+
+    return libraryTracks.filter((track) =>
+      [track.title, track.artist, track.album, track.mood]
+        .join(' ')
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [libraryTracks, searchQuery]);
   const selectedTrack = useMemo(
-    () => tracks.find((track) => track.id === selectedTrackId) ?? tracks[0],
-    [selectedTrackId],
-  );
-  const likedTracks = useMemo(
-    () => tracks.filter((track) => likedTrackIds.includes(track.id)),
-    [likedTrackIds],
+    () =>
+      libraryTracks.find((track) => track.id === selectedTrackId) ??
+      fallbackTracks[0],
+    [libraryTracks, selectedTrackId],
   );
   const selectedPlaylist = useMemo(
     () =>
@@ -398,14 +122,25 @@ export default function App() {
       playlists[0],
     [playlists, selectedPlaylistId],
   );
-  const selectedPlaylistTracks = useMemo(
-    () =>
-      selectedPlaylist
-        ? tracks.filter((track) => selectedPlaylist.trackIds.includes(track.id))
-        : [],
-    [selectedPlaylist],
+  const isSelectedTrackLiked = favoriteTracks.some(
+    (track) => track.id === selectedTrackId,
   );
-  const isSelectedTrackLiked = likedTrackIds.includes(selectedTrackId);
+  const audioSource = useMemo<AudioSource>(() => {
+    if (!session) {
+      return null;
+    }
+
+    if (selectedTrack.streamUrl) {
+      return { uri: `${apiBaseUrl}${selectedTrack.streamUrl}` };
+    }
+
+    return selectedTrack.audio ?? null;
+  }, [selectedTrack.audio, selectedTrack.streamUrl, session]);
+  const player = useAudioPlayer(audioSource, { updateInterval: 500 });
+  const playerStatus = useAudioPlayerStatus(player);
+  const isSoundLoading = Boolean(
+    session && (!playerStatus.isLoaded || playerStatus.isBuffering),
+  );
 
   const googleEnabled = useMemo(
     () =>
@@ -430,6 +165,26 @@ export default function App() {
         scheme: 'sonik',
       },
     );
+
+  useEffect(() => {
+    void requestJson<TracksResponse>('/tracks')
+      .then((payload) => {
+        if (!payload.tracks.length) {
+          return;
+        }
+
+        const nextTracks = payload.tracks.map(normalizeTrack);
+        setLibraryTracks(nextTracks);
+        setSelectedTrackId(nextTracks[0].id);
+        setProgress(0);
+        setSoundPosition(0);
+        setSoundDuration(nextTracks[0].durationMs ?? 0);
+        setIsPlaying(false);
+      })
+      .catch(() => {
+        setNoticeMessage('Local tracks could not be loaded from the backend yet.');
+      });
+  }, []);
 
   useEffect(() => {
     void AsyncStorage.getItem(sessionStorageKey)
@@ -459,6 +214,25 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!session) {
+      return;
+    }
+
+    void refreshPersonalLibrary(session);
+  }, [session]);
+
+  useEffect(() => {
+    if (!visibleTracks.length) {
+      return;
+    }
+
+    if (!visibleTracks.some((track) => track.id === selectedTrackId)) {
+      setSelectedTrackId(visibleTracks[0].id);
+      setIsPlaying(false);
+    }
+  }, [selectedTrackId, visibleTracks]);
+
+  useEffect(() => {
     if (googleResponse?.type !== 'success') {
       return;
     }
@@ -475,94 +249,53 @@ export default function App() {
   }, [googleResponse]);
 
   useEffect(() => {
-    void Audio.setAudioModeAsync({
-      playsInSilentModeIOS: true,
-      shouldDuckAndroid: true,
-      staysActiveInBackground: false,
+    void setAudioModeAsync({
+      playsInSilentMode: true,
+      interruptionMode: 'duckOthers',
+      shouldPlayInBackground: false,
     });
-
-    return () => {
-      if (soundRef.current) {
-        void soundRef.current.unloadAsync();
-        soundRef.current = null;
-      }
-    };
   }, []);
 
   useEffect(() => {
-    if (!session) {
-      return undefined;
+    if (session && !audioSource) {
+      setErrorMessage('This track does not have a backend audio file yet.');
     }
+  }, [audioSource, session]);
 
-    let isMounted = true;
-    const previousSound = soundRef.current;
-    soundRef.current = null;
-    setIsSoundLoading(true);
+  useEffect(() => {
+    completedTrackRef.current = '';
     setProgress(0);
     setSoundPosition(0);
-    setSoundDuration(selectedTrack.durationMs);
-
-    async function loadTrack() {
-      try {
-        if (previousSound) {
-          await previousSound.unloadAsync();
-        }
-
-        const { sound } = await Audio.Sound.createAsync(
-          selectedTrack.audio,
-          {
-            progressUpdateIntervalMillis: 500,
-            shouldPlay: isPlaying,
-            volume: volume / 100,
-          },
-          (status) => {
-            if (isMounted) {
-              updatePlaybackStatus(status);
-            }
-          },
-        );
-
-        if (!isMounted) {
-          await sound.unloadAsync();
-          return;
-        }
-
-        soundRef.current = sound;
-      } catch {
-        if (isMounted) {
-          setErrorMessage('This track could not be played.');
-        }
-      } finally {
-        if (isMounted) {
-          setIsSoundLoading(false);
-        }
-      }
-    }
-
-    void loadTrack();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [session, selectedTrack.id]);
+    setSoundDuration(selectedTrack.durationMs ?? 0);
+  }, [selectedTrack.durationMs, selectedTrack.id]);
 
   useEffect(() => {
-    if (!session || !soundRef.current || isSoundLoading) {
+    if (!session || !audioSource) {
       return;
     }
 
-    void (isPlaying
-      ? soundRef.current.playAsync()
-      : soundRef.current.pauseAsync());
-  }, [isPlaying, isSoundLoading, session]);
-
-  useEffect(() => {
-    if (!soundRef.current) {
+    if (isPlaying) {
+      player.play();
       return;
     }
 
-    void soundRef.current.setVolumeAsync(volume / 100);
-  }, [volume]);
+    player.pause();
+  }, [audioSource, isPlaying, player, session]);
+
+  useEffect(() => {
+    if (!session || !playerStatus.isLoaded) {
+      return;
+    }
+
+    updatePlaybackStatus();
+  }, [
+    playerStatus.currentTime,
+    playerStatus.didJustFinish,
+    playerStatus.duration,
+    playerStatus.isLoaded,
+    playerStatus.playing,
+    session,
+  ]);
 
   function clearFeedback() {
     setErrorMessage('');
@@ -573,28 +306,94 @@ export default function App() {
     setErrorMessage(getFriendlyError(error, view));
   }
 
-  function updatePlaybackStatus(status: AVPlaybackStatus) {
-    if (!status.isLoaded) {
-      if (status.error) {
-        setErrorMessage('This track could not be played.');
-      }
+  function authHeaders(activeSession = session): Record<string, string> {
+    return activeSession
+      ? {
+          Authorization: `Bearer ${activeSession.accessToken}`,
+        }
+      : {};
+  }
+
+  async function requestAuthorizedJson<T>(
+    path: string,
+    init?: RequestInit,
+    activeSession = session,
+  ) {
+    return requestJson<T>(path, {
+      ...init,
+      headers: {
+        ...authHeaders(activeSession),
+        ...((init?.headers ?? {}) as Record<string, string>),
+      },
+    });
+  }
+
+  async function refreshPersonalLibrary(activeSession = session) {
+    if (!activeSession) {
       return;
     }
 
-    const duration = status.durationMillis ?? selectedTrack.durationMs;
-    const position = status.positionMillis ?? 0;
+    const [favoritesPayload, recentPayload, playlistsPayload] =
+      await Promise.all([
+        requestAuthorizedJson<TracksResponse>(
+          '/tracks/favorites/me',
+          undefined,
+          activeSession,
+        ),
+        requestAuthorizedJson<TracksResponse>(
+          '/tracks/recent/me',
+          undefined,
+          activeSession,
+        ),
+        requestAuthorizedJson<PlaylistsResponse>(
+          '/playlists',
+          undefined,
+          activeSession,
+        ),
+      ]);
+
+    setFavoriteTracks(favoritesPayload.tracks.map(normalizeTrack));
+    setRecentTracks(recentPayload.tracks.map(normalizeTrack));
+
+    const nextPlaylists = playlistsPayload.playlists.map(normalizePlaylist);
+    setPlaylists(nextPlaylists);
+    setSelectedPlaylistId((current) =>
+      current && nextPlaylists.some((playlist) => playlist.id === current)
+        ? current
+        : nextPlaylists[0]?.id ?? '',
+    );
+  }
+
+  function updatePlaybackStatus() {
+    if (!playerStatus.isLoaded) {
+      return;
+    }
+
+    const duration = Math.round(
+      (playerStatus.duration || 0) * 1000 || selectedTrack.durationMs || 0,
+    );
+    const position = Math.round((playerStatus.currentTime || 0) * 1000);
 
     setSoundPosition(position);
     setSoundDuration(duration);
     setProgress(duration ? Math.min(100, (position / duration) * 100) : 0);
-    setIsPlaying(status.isPlaying);
 
-    if (status.didJustFinish) {
+    if (
+      playerStatus.didJustFinish &&
+      completedTrackRef.current !== selectedTrackId
+    ) {
+      completedTrackRef.current = selectedTrackId;
+      void recordCurrentPlay(true);
       selectNextTrack();
     }
   }
 
   function selectTrack(trackId: string) {
+    if (trackId === selectedTrackId) {
+      setIsPlaying((current) => !current);
+      return;
+    }
+
     setSelectedTrackId(trackId);
     setProgress(0);
     setSoundPosition(0);
@@ -602,15 +401,33 @@ export default function App() {
   }
 
   function selectNextTrack() {
-    const currentIndex = tracks.findIndex((track) => track.id === selectedTrackId);
-    const nextTrack = tracks[(currentIndex + 1) % tracks.length];
+    const playbackTracks = visibleTracks.length ? visibleTracks : libraryTracks;
+
+    if (!playbackTracks.length) {
+      return;
+    }
+
+    const currentIndex = playbackTracks.findIndex(
+      (track) => track.id === selectedTrackId,
+    );
+    const nextTrack = playbackTracks[(currentIndex + 1) % playbackTracks.length];
     selectTrack(nextTrack.id);
   }
 
   function selectPreviousTrack() {
-    const currentIndex = tracks.findIndex((track) => track.id === selectedTrackId);
+    const playbackTracks = visibleTracks.length ? visibleTracks : libraryTracks;
+
+    if (!playbackTracks.length) {
+      return;
+    }
+
+    const currentIndex = playbackTracks.findIndex(
+      (track) => track.id === selectedTrackId,
+    );
     const previousTrack =
-      tracks[(currentIndex - 1 + tracks.length) % tracks.length];
+      playbackTracks[
+        (currentIndex - 1 + playbackTracks.length) % playbackTracks.length
+      ];
     selectTrack(previousTrack.id);
   }
 
@@ -621,81 +438,155 @@ export default function App() {
 
     setSoundPosition(nextPosition);
     setProgress(soundDuration ? (nextPosition / soundDuration) * 100 : 0);
-    await soundRef.current?.setPositionAsync(nextPosition);
+    await player.seekTo(nextPosition / 1000);
   }
 
-  function toggleLikeTrack(trackId: string) {
-    setLikedTrackIds((current) =>
-      current.includes(trackId)
-        ? current.filter((likedTrackId) => likedTrackId !== trackId)
-        : [...current, trackId],
-    );
+  async function toggleLikeTrack(trackId: string) {
+    if (!session) {
+      return;
+    }
+
+    const isFavorite = favoriteTracks.some((track) => track.id === trackId);
+
+    try {
+      if (isFavorite) {
+        await requestAuthorizedJson(`/tracks/${trackId}/favorite`, {
+          method: 'DELETE',
+        });
+        setFavoriteTracks((current) =>
+          current.filter((track) => track.id !== trackId),
+        );
+      } else {
+        await requestAuthorizedJson(`/tracks/${trackId}/favorite`, {
+          method: 'POST',
+        });
+        const track = libraryTracks.find((candidate) => candidate.id === trackId);
+
+        if (track) {
+          setFavoriteTracks((current) => [track, ...current]);
+        }
+      }
+    } catch (error) {
+      handleApiError(error);
+    }
   }
 
-  function createPlaylist() {
+  async function createPlaylist() {
     const name = newPlaylistName.trim();
 
-    if (!name) {
+    if (!session || !name) {
       return;
     }
 
-    const playlist: Playlist = {
-      id: `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now()}`,
-      name,
-      trackIds: [],
-    };
+    try {
+      const payload = await requestAuthorizedJson<PlaylistResponse>('/playlists', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+        }),
+      });
 
-    setPlaylists((current) => [...current, playlist]);
-    setSelectedPlaylistId(playlist.id);
-    setNewPlaylistName('');
+      const playlist = normalizePlaylist(payload.playlist);
+      setPlaylists((current) => [playlist, ...current]);
+      setSelectedPlaylistId(playlist.id);
+      setNewPlaylistName('');
+    } catch (error) {
+      handleApiError(error);
+    }
   }
 
-  function deletePlaylist(playlistId: string) {
-    setPlaylists((current) => {
-      const nextPlaylists = current.filter(
-        (playlist) => playlist.id !== playlistId,
+  async function deletePlaylist(playlistId: string) {
+    if (!session) {
+      return;
+    }
+
+    try {
+      await requestAuthorizedJson(`/playlists/${playlistId}`, {
+        method: 'DELETE',
+      });
+
+      setPlaylists((current) => {
+        const nextPlaylists = current.filter(
+          (playlist) => playlist.id !== playlistId,
+        );
+
+        if (selectedPlaylistId === playlistId) {
+          setSelectedPlaylistId(nextPlaylists[0]?.id ?? '');
+        }
+
+        return nextPlaylists;
+      });
+    } catch (error) {
+      handleApiError(error);
+    }
+  }
+
+  async function addCurrentTrackToPlaylist() {
+    if (!session || !selectedPlaylist) {
+      return;
+    }
+
+    if (selectedPlaylist.tracks.some((track) => track.id === selectedTrackId)) {
+      return;
+    }
+
+    try {
+      const payload = await requestAuthorizedJson<PlaylistResponse>(
+        `/playlists/${selectedPlaylist.id}/tracks/${selectedTrackId}`,
+        {
+          method: 'POST',
+        },
       );
+      const playlist = normalizePlaylist(payload.playlist);
 
-      if (selectedPlaylistId === playlistId) {
-        setSelectedPlaylistId(nextPlaylists[0]?.id ?? '');
-      }
-
-      return nextPlaylists;
-    });
+      setPlaylists((current) =>
+        current.map((candidate) =>
+          candidate.id === playlist.id ? playlist : candidate,
+        ),
+      );
+    } catch (error) {
+      handleApiError(error);
+    }
   }
 
-  function addCurrentTrackToPlaylist() {
-    if (!selectedPlaylist) {
+  async function removeTrackFromPlaylist(playlistId: string, trackId: string) {
+    if (!session) {
       return;
     }
 
-    setPlaylists((current) =>
-      current.map((playlist) =>
-        playlist.id === selectedPlaylist.id
-          ? {
-              ...playlist,
-              trackIds: playlist.trackIds.includes(selectedTrackId)
-                ? playlist.trackIds
-                : [...playlist.trackIds, selectedTrackId],
-            }
-          : playlist,
-      ),
-    );
+    try {
+      const payload = await requestAuthorizedJson<PlaylistResponse>(
+        `/playlists/${playlistId}/tracks/${trackId}`,
+        {
+          method: 'DELETE',
+        },
+      );
+      const playlist = normalizePlaylist(payload.playlist);
+
+      setPlaylists((current) =>
+        current.map((candidate) =>
+          candidate.id === playlist.id ? playlist : candidate,
+        ),
+      );
+    } catch (error) {
+      handleApiError(error);
+    }
   }
 
-  function removeTrackFromPlaylist(playlistId: string, trackId: string) {
-    setPlaylists((current) =>
-      current.map((playlist) =>
-        playlist.id === playlistId
-          ? {
-              ...playlist,
-              trackIds: playlist.trackIds.filter(
-                (playlistTrackId) => playlistTrackId !== trackId,
-              ),
-            }
-          : playlist,
-      ),
-    );
+  async function recordCurrentPlay(completed: boolean) {
+    if (!session || !selectedTrack.streamUrl) {
+      return;
+    }
+
+    await requestAuthorizedJson(`/tracks/${selectedTrack.id}/recent`, {
+      method: 'POST',
+      body: JSON.stringify({
+        progressSeconds: Math.floor(soundPosition / 1000),
+        completed,
+      }),
+    }).catch(() => undefined);
+
+    await refreshPersonalLibrary().catch(() => undefined);
   }
 
   async function persistSession(nextSession: SessionState) {
@@ -834,13 +725,14 @@ export default function App() {
   }
 
   async function handleLogout() {
-    if (soundRef.current) {
-      await soundRef.current.unloadAsync();
-      soundRef.current = null;
-    }
+    player.pause();
 
     await AsyncStorage.removeItem(sessionStorageKey);
     setSession(null);
+    setFavoriteTracks([]);
+    setRecentTracks([]);
+    setPlaylists([]);
+    setSelectedPlaylistId('');
     setView('login');
     setActivePanel('flow');
     setResetForm({
@@ -899,7 +791,14 @@ export default function App() {
 
             <View style={styles.searchPill}>
               <Ionicons color="#b8afaa" name="search" size={18} />
-              <Text style={styles.searchText}>Search songs, artists, moods</Text>
+              <TextInput
+                autoCapitalize="none"
+                onChangeText={setSearchQuery}
+                placeholder="Search songs, artists, moods"
+                placeholderTextColor="#b8afaa"
+                style={styles.searchInput}
+                value={searchQuery}
+              />
             </View>
 
             <View style={styles.panelTabs}>
@@ -942,7 +841,7 @@ export default function App() {
                   <Text style={styles.chip}>{selectedTrack.mood}</Text>
                   <Text style={styles.chip}>{selectedTrack.plays} plays</Text>
                   <Text style={styles.chip}>
-                    {isSoundLoading ? 'Loading audio' : 'Static audio'}
+                    {isSoundLoading ? 'Loading audio' : 'Backend audio'}
                   </Text>
                 </View>
               </View>
@@ -980,7 +879,7 @@ export default function App() {
               <Text style={styles.sectionAction}>Mood sort</Text>
             </View>
             <View style={styles.trackList}>
-              {tracks.map((track, index) => {
+              {visibleTracks.map((track, index) => {
                 const isSelected = track.id === selectedTrackId;
 
                 return (
@@ -1009,15 +908,53 @@ export default function App() {
                         {track.artist} - {track.mood}
                       </Text>
                     </View>
+                    <Pressable
+                      accessibilityLabel={
+                        favoriteTracks.some((favorite) => favorite.id === track.id)
+                          ? 'Unlike track'
+                          : 'Like track'
+                      }
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        void toggleLikeTrack(track.id);
+                      }}
+                      style={styles.rowIconButton}
+                    >
+                      <Ionicons
+                        color={
+                          favoriteTracks.some(
+                            (favorite) => favorite.id === track.id,
+                          )
+                            ? '#ff7a59'
+                            : '#b8afaa'
+                        }
+                        name={
+                          favoriteTracks.some(
+                            (favorite) => favorite.id === track.id,
+                          )
+                            ? 'heart'
+                            : 'heart-outline'
+                        }
+                        size={19}
+                      />
+                    </Pressable>
                     <Text style={styles.trackDuration}>{track.duration}</Text>
                   </Pressable>
                 );
               })}
+              {!visibleTracks.length ? (
+                <View style={styles.emptyCard}>
+                  <Text style={styles.emptyTitle}>No tracks found</Text>
+                  <Text style={styles.caption}>
+                    Try a different song, artist, album, or mood.
+                  </Text>
+                </View>
+              ) : null}
             </View>
 
             <View style={styles.queueCard}>
               <Text style={styles.sectionTitle}>Up next</Text>
-              {tracks
+              {visibleTracks
                 .filter((track) => track.id !== selectedTrack.id)
                 .slice(0, 3)
                 .map((track) => (
@@ -1045,11 +982,13 @@ export default function App() {
               <>
                 <View style={styles.sectionHeader}>
                   <Text style={styles.sectionTitle}>Liked songs</Text>
-                  <Text style={styles.sectionAction}>{likedTracks.length} saved</Text>
+                  <Text style={styles.sectionAction}>
+                    {favoriteTracks.length} saved
+                  </Text>
                 </View>
                 <View style={styles.trackList}>
-                  {likedTracks.length ? (
-                    likedTracks.map((track) => (
+                  {favoriteTracks.length ? (
+                    favoriteTracks.map((track) => (
                       <Pressable
                         key={track.id}
                         onPress={() => selectTrack(track.id)}
@@ -1084,6 +1023,48 @@ export default function App() {
                 </View>
 
                 <View style={styles.sectionHeader}>
+                  <Text style={styles.sectionTitle}>Recent plays</Text>
+                  <Text style={styles.sectionAction}>
+                    {recentTracks.length} listened
+                  </Text>
+                </View>
+                <View style={styles.trackList}>
+                  {recentTracks.length ? (
+                    recentTracks.map((track, index) => (
+                      <Pressable
+                        key={`recent-${track.id}-${index}`}
+                        onPress={() => selectTrack(track.id)}
+                        style={[
+                          styles.trackRow,
+                          track.id === selectedTrackId
+                            ? styles.trackRowActive
+                            : null,
+                        ]}
+                      >
+                        <Ionicons color="#55d6c2" name="time" size={19} />
+                        <TrackArt track={track} size="small" />
+                        <View style={styles.trackMeta}>
+                          <Text style={styles.trackName} numberOfLines={1}>
+                            {track.title}
+                          </Text>
+                          <Text style={styles.trackSubtext} numberOfLines={1}>
+                            {track.artist} - {track.album}
+                          </Text>
+                        </View>
+                        <Text style={styles.trackDuration}>{track.duration}</Text>
+                      </Pressable>
+                    ))
+                  ) : (
+                    <View style={styles.emptyCard}>
+                      <Text style={styles.emptyTitle}>No recent plays yet</Text>
+                      <Text style={styles.caption}>
+                        Finished tracks will appear here automatically.
+                      </Text>
+                    </View>
+                  )}
+                </View>
+
+                <View style={styles.sectionHeader}>
                   <Text style={styles.sectionTitle}>Playlists</Text>
                   <Text style={styles.sectionAction}>{playlists.length} crates</Text>
                 </View>
@@ -1099,7 +1080,7 @@ export default function App() {
                     >
                       <Text style={styles.playlistTitle}>{playlist.name}</Text>
                       <Text style={styles.caption}>
-                        {playlist.trackIds.length} tracks
+                        {playlist.trackCount} tracks
                       </Text>
                     </Pressable>
                   ))}
@@ -1125,7 +1106,7 @@ export default function App() {
 
                 <View style={styles.statsRow}>
                   <View style={styles.statCard}>
-                    <Text style={styles.statValue}>{likedTracks.length}</Text>
+                    <Text style={styles.statValue}>{favoriteTracks.length}</Text>
                     <Text style={styles.statLabel}>Liked</Text>
                   </View>
                   <View style={styles.statCard}>
@@ -1133,8 +1114,8 @@ export default function App() {
                     <Text style={styles.statLabel}>Playlists</Text>
                   </View>
                   <View style={styles.statCard}>
-                    <Text style={styles.statValue}>{tracks.length}</Text>
-                    <Text style={styles.statLabel}>Static tracks</Text>
+                    <Text style={styles.statValue}>{libraryTracks.length}</Text>
+                    <Text style={styles.statLabel}>Library</Text>
                   </View>
                 </View>
 
@@ -1190,7 +1171,7 @@ export default function App() {
                     <Text style={styles.sectionTitle}>Manage playlists</Text>
                     {selectedPlaylist ? (
                       <Text style={styles.sectionAction}>
-                        {selectedPlaylist.trackIds.length} tracks
+                        {selectedPlaylist.trackCount} tracks
                       </Text>
                     ) : null}
                   </View>
@@ -1227,8 +1208,8 @@ export default function App() {
 
                   {selectedPlaylist ? (
                     <>
-                      {selectedPlaylistTracks.length ? (
-                        selectedPlaylistTracks.map((track) => (
+                      {selectedPlaylist.tracks.length ? (
+                        selectedPlaylist.tracks.map((track) => (
                           <View style={styles.playlistTrackRow} key={track.id}>
                             <Pressable
                               onPress={() => selectTrack(track.id)}
@@ -1350,23 +1331,6 @@ export default function App() {
               <Text style={styles.progressText}>{formatMillis(soundDuration)}</Text>
             </View>
 
-            <Pressable
-              accessibilityLabel="Change volume"
-              onPress={() =>
-                setVolume((current) => (current >= 100 ? 20 : current + 20))
-              }
-              style={styles.volumeRow}
-            >
-              <Ionicons color="#b8afaa" name="volume-medium" size={17} />
-              <View style={styles.volumeTrack}>
-                <View
-                  style={[
-                    styles.volumeFill,
-                    { width: `${volume}%` as `${number}%` },
-                  ]}
-                />
-              </View>
-            </Pressable>
           </View>
         </View>
       </SafeAreaView>
@@ -1747,10 +1711,13 @@ const styles = StyleSheet.create({
     minHeight: 48,
     paddingHorizontal: 16,
   },
-  searchText: {
-    color: '#b8afaa',
+  searchInput: {
+    color: '#fbf7ef',
+    flex: 1,
     fontSize: 14,
     fontWeight: '700',
+    minHeight: 48,
+    paddingVertical: 0,
   },
   panelTabs: {
     backgroundColor: 'rgba(248,244,236,0.06)',
@@ -2056,6 +2023,12 @@ const styles = StyleSheet.create({
     fontSize: isSmallScreen ? 11 : 12,
     fontWeight: '800',
   },
+  rowIconButton: {
+    alignItems: 'center',
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
   queueCard: {
     backgroundColor: 'rgba(245,193,93,0.08)',
     borderColor: 'rgba(248,244,236,0.1)',
@@ -2278,26 +2251,6 @@ const styles = StyleSheet.create({
     gap: isSmallScreen ? 14 : 18,
     justifyContent: 'center',
   },
-  iconButton: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(248,244,236,0.07)',
-    borderColor: 'rgba(248,244,236,0.12)',
-    borderRadius: 999,
-    borderWidth: 1,
-    height: isSmallScreen ? 40 : 44,
-    justifyContent: 'center',
-    width: isSmallScreen ? 40 : 44,
-    minHeight: 44,
-    minWidth: 44,
-  },
-  iconButtonSolid: {
-    backgroundColor: '#f5c15d',
-    borderColor: '#f5c15d',
-    height: isSmallScreen ? 48 : 52,
-    width: isSmallScreen ? 48 : 52,
-    minHeight: 44,
-    minWidth: 44,
-  },
   progressMeta: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -2320,71 +2273,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#55d6c2',
     borderRadius: 999,
     height: '100%',
-  },
-  volumeRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 9,
-  },
-  volumeTrack: {
-    backgroundColor: 'rgba(248,244,236,0.12)',
-    borderRadius: 999,
-    flex: 1,
-    height: 4,
-    overflow: 'hidden',
-  },
-  volumeFill: {
-    backgroundColor: '#f5c15d',
-    borderRadius: 999,
-    height: '100%',
-  },
-  trackArt: {
-    overflow: 'hidden',
-  },
-  trackArtSmall: {
-    borderRadius: 8,
-    height: responsiveScale(46),
-    width: responsiveScale(46),
-  },
-  trackArtMedium: {
-    borderRadius: 8,
-    height: responsiveScale(92),
-    width: responsiveScale(92),
-  },
-  trackArtLarge: {
-    borderRadius: 8,
-    height: isSmallScreen ? 160 : isMediumScreen ? 185 : 210,
-    width: isSmallScreen ? 160 : isMediumScreen ? 185 : 210,
-    alignSelf: 'center',
-    marginVertical: 12,
-  },
-  artFrame: {
-    borderRadius: 24,
-    borderWidth: 2,
-    height: '58%',
-    left: '20%',
-    position: 'absolute',
-    top: '18%',
-    transform: [{ rotate: '20deg' }],
-    width: '58%',
-  },
-  artCircle: {
-    borderRadius: 999,
-    bottom: '12%',
-    height: '34%',
-    opacity: 0.9,
-    position: 'absolute',
-    right: '12%',
-    width: '34%',
-  },
-  artLine: {
-    backgroundColor: 'rgba(0,0,0,0.28)',
-    borderRadius: 999,
-    bottom: '14%',
-    height: '15%',
-    left: '12%',
-    position: 'absolute',
-    width: '48%',
   },
   bootCard: {
     alignItems: 'center',

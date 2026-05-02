@@ -2,6 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Google from 'expo-auth-session/providers/google';
 import {
+  createAudioPlayer,
   setAudioModeAsync,
   useAudioPlayer,
   useAudioPlayerStatus,
@@ -13,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Dimensions,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -41,11 +43,18 @@ import type {
   Playlist,
   PlaylistResponse,
   PlaylistsResponse,
+  RepeatMode,
   SessionState,
   SessionUser,
   TracksResponse,
 } from './src/types';
-import { formatMillis, normalizePlaylist, normalizeTrack } from './src/utils/music';
+import {
+  formatMillis,
+  getRuntimeLabel,
+  normalizePlaylist,
+  normalizeTrack,
+  uniqueTracksById,
+} from './src/utils/music';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -53,6 +62,21 @@ WebBrowser.maybeCompleteAuthSession();
 const screenWidth = Dimensions.get('window').width;
 const isSmallScreen = screenWidth < 380;
 const isMediumScreen = screenWidth >= 380 && screenWidth < 480;
+
+function getAudioSourceForTrack(
+  track: MusicTrack,
+  activeSession: SessionState | null,
+): AudioSource {
+  if (!activeSession) {
+    return null;
+  }
+
+  if (track.streamUrl) {
+    return { uri: `${apiBaseUrl}${track.streamUrl}` };
+  }
+
+  return track.audio ?? null;
+}
 
 export default function App() {
   const completedTrackRef = useRef('');
@@ -67,16 +91,24 @@ export default function App() {
   const [favoriteTracks, setFavoriteTracks] = useState<MusicTrack[]>([]);
   const [recentTracks, setRecentTracks] = useState<MusicTrack[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [isTrackDetailOpen, setIsTrackDetailOpen] = useState(false);
+  const [isPlaylistPickerOpen, setIsPlaylistPickerOpen] = useState(false);
+  const [addToPlaylistId, setAddToPlaylistId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTrackId, setSelectedTrackId] = useState(fallbackTracks[0].id);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isShuffle, setIsShuffle] = useState(false);
+  const [repeatMode, setRepeatMode] = useState<RepeatMode>('off');
   const [progress, setProgress] = useState(0);
   const [soundPosition, setSoundPosition] = useState(0);
   const [soundDuration, setSoundDuration] = useState(
     fallbackTracks[0].durationMs ?? 0,
   );
+  const [durationByTrackId, setDurationByTrackId] = useState<
+    Record<string, string>
+  >({});
   const [progressTrackWidth, setProgressTrackWidth] = useState(1);
-  const [selectedPlaylistId, setSelectedPlaylistId] = useState('');
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState('library');
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [loginForm, setLoginForm] = useState({
     email: '',
@@ -96,20 +128,46 @@ export default function App() {
     newPassword: '',
   });
 
+  const currentTracks = useMemo(() => {
+    if (selectedPlaylistId === 'favorites') {
+      return favoriteTracks.length ? favoriteTracks : libraryTracks;
+    }
+
+    if (selectedPlaylistId === 'recent') {
+      return recentTracks.length ? recentTracks : libraryTracks;
+    }
+
+    const playlist = playlists.find(
+      (candidate) => candidate.id === selectedPlaylistId,
+    );
+
+    if (playlist) {
+      return playlist.tracks.length ? playlist.tracks : libraryTracks;
+    }
+
+    return libraryTracks;
+  }, [
+    favoriteTracks,
+    libraryTracks,
+    playlists,
+    recentTracks,
+    selectedPlaylistId,
+  ]);
+
   const visibleTracks = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
 
     if (!query) {
-      return libraryTracks;
+      return currentTracks;
     }
 
-    return libraryTracks.filter((track) =>
+    return currentTracks.filter((track) =>
       [track.title, track.artist, track.album, track.mood]
         .join(' ')
         .toLowerCase()
         .includes(query),
     );
-  }, [libraryTracks, searchQuery]);
+  }, [currentTracks, searchQuery]);
   const selectedTrack = useMemo(
     () =>
       libraryTracks.find((track) => track.id === selectedTrackId) ??
@@ -118,24 +176,46 @@ export default function App() {
   );
   const selectedPlaylist = useMemo(
     () =>
-      playlists.find((playlist) => playlist.id === selectedPlaylistId) ??
-      playlists[0],
+      playlists.find((playlist) => playlist.id === selectedPlaylistId) ?? null,
     [playlists, selectedPlaylistId],
+  );
+  const selectedSourceLabel = useMemo(() => {
+    if (selectedPlaylistId === 'favorites') {
+      return 'Liked Songs';
+    }
+
+    if (selectedPlaylistId === 'recent') {
+      return 'Recent Plays';
+    }
+
+    return selectedPlaylist?.name ?? 'Library';
+  }, [selectedPlaylist, selectedPlaylistId]);
+  const addTargetPlaylist = selectedPlaylist ?? playlists[0] ?? null;
+  const detailAddTargetPlaylist =
+    playlists.find((playlist) => playlist.id === addToPlaylistId) ??
+    playlists[0] ??
+    null;
+  const isSelectedTrackInDetailTarget = Boolean(
+    detailAddTargetPlaylist?.tracks.some((track) => track.id === selectedTrackId),
+  );
+  const selectedRuntimeLabel = getRuntimeLabel(
+    soundDuration,
+    durationByTrackId[selectedTrack.id] ?? selectedTrack.duration,
+  );
+  const sourceFilters = useMemo(
+    () => [
+      { id: 'library', label: 'Home', count: libraryTracks.length },
+      { id: 'favorites', label: 'Liked', count: favoriteTracks.length },
+      { id: 'recent', label: 'Recent', count: recentTracks.length },
+    ],
+    [favoriteTracks.length, libraryTracks.length, recentTracks.length],
   );
   const isSelectedTrackLiked = favoriteTracks.some(
     (track) => track.id === selectedTrackId,
   );
   const audioSource = useMemo<AudioSource>(() => {
-    if (!session) {
-      return null;
-    }
-
-    if (selectedTrack.streamUrl) {
-      return { uri: `${apiBaseUrl}${selectedTrack.streamUrl}` };
-    }
-
-    return selectedTrack.audio ?? null;
-  }, [selectedTrack.audio, selectedTrack.streamUrl, session]);
+    return getAudioSourceForTrack(selectedTrack, session);
+  }, [selectedTrack, session]);
   const player = useAudioPlayer(audioSource, { updateInterval: 500 });
   const playerStatus = useAudioPlayerStatus(player);
   const isSoundLoading = Boolean(
@@ -222,6 +302,19 @@ export default function App() {
   }, [session]);
 
   useEffect(() => {
+    if (!playlists.length) {
+      setAddToPlaylistId('');
+      return;
+    }
+
+    setAddToPlaylistId((current) =>
+      playlists.some((playlist) => playlist.id === current)
+        ? current
+        : playlists[0].id,
+    );
+  }, [playlists]);
+
+  useEffect(() => {
     if (!visibleTracks.length) {
       return;
     }
@@ -261,6 +354,79 @@ export default function App() {
       setErrorMessage('This track does not have a backend audio file yet.');
     }
   }, [audioSource, session]);
+
+  useEffect(() => {
+    if (!session) {
+      return undefined;
+    }
+
+    const tracksNeedingRuntime = visibleTracks
+      .filter(
+        (track) =>
+          !durationByTrackId[track.id] &&
+          (!track.duration || track.duration === '--:--'),
+      )
+      .slice(0, 24);
+
+    if (!tracksNeedingRuntime.length) {
+      return undefined;
+    }
+
+    let isCancelled = false;
+    const cleanupTasks: Array<() => void> = [];
+
+    tracksNeedingRuntime.forEach((track) => {
+      const source = getAudioSourceForTrack(track, session);
+
+      if (!source) {
+        return;
+      }
+
+      const metadataPlayer = createAudioPlayer(source, {
+        updateInterval: 250,
+      });
+      let isCleanedUp = false;
+
+      const cleanup = () => {
+        if (isCleanedUp) {
+          return;
+        }
+
+        isCleanedUp = true;
+        clearInterval(intervalId);
+        clearTimeout(timeoutId);
+        metadataPlayer.remove();
+      };
+      const readRuntime = () => {
+        const duration = Math.round((metadataPlayer.duration || 0) * 1000);
+
+        if (!duration || isCancelled) {
+          return;
+        }
+
+        const runtimeLabel = formatMillis(duration);
+        setDurationByTrackId((current) =>
+          current[track.id] === runtimeLabel
+            ? current
+            : {
+                ...current,
+                [track.id]: runtimeLabel,
+              },
+        );
+        cleanup();
+      };
+      const intervalId = setInterval(readRuntime, 250);
+      const timeoutId = setTimeout(cleanup, 7000);
+
+      cleanupTasks.push(cleanup);
+      readRuntime();
+    });
+
+    return () => {
+      isCancelled = true;
+      cleanupTasks.forEach((cleanup) => cleanup());
+    };
+  }, [durationByTrackId, session, visibleTracks]);
 
   useEffect(() => {
     completedTrackRef.current = '';
@@ -353,14 +519,17 @@ export default function App() {
       ]);
 
     setFavoriteTracks(favoritesPayload.tracks.map(normalizeTrack));
-    setRecentTracks(recentPayload.tracks.map(normalizeTrack));
+    setRecentTracks(uniqueTracksById(recentPayload.tracks.map(normalizeTrack)));
 
     const nextPlaylists = playlistsPayload.playlists.map(normalizePlaylist);
     setPlaylists(nextPlaylists);
     setSelectedPlaylistId((current) =>
-      current && nextPlaylists.some((playlist) => playlist.id === current)
+      current === 'library' ||
+      current === 'favorites' ||
+      current === 'recent' ||
+      nextPlaylists.some((playlist) => playlist.id === current)
         ? current
-        : nextPlaylists[0]?.id ?? '',
+        : 'library',
     );
   }
 
@@ -378,12 +547,31 @@ export default function App() {
     setSoundDuration(duration);
     setProgress(duration ? Math.min(100, (position / duration) * 100) : 0);
 
+    if (duration > 0) {
+      const runtimeLabel = formatMillis(duration);
+
+      setDurationByTrackId((current) =>
+        current[selectedTrackId] === runtimeLabel
+          ? current
+          : {
+              ...current,
+              [selectedTrackId]: runtimeLabel,
+            },
+      );
+    }
+
     if (
       playerStatus.didJustFinish &&
       completedTrackRef.current !== selectedTrackId
     ) {
       completedTrackRef.current = selectedTrackId;
       void recordCurrentPlay(true);
+
+      if (repeatMode === 'one') {
+        void player.seekTo(0).then(() => player.play());
+        return;
+      }
+
       selectNextTrack();
     }
   }
@@ -400,22 +588,68 @@ export default function App() {
     setIsPlaying(true);
   }
 
+  function openTrackDetail(trackId: string) {
+    if (trackId !== selectedTrackId) {
+      selectTrack(trackId);
+    }
+
+    // setIsTrackDetailOpen(true);
+  }
+
+  function closeTrackDetail() {
+    setIsPlaylistPickerOpen(false);
+    setIsTrackDetailOpen(false);
+  }
+
+  function openPlaylistPicker() {
+    if (detailAddTargetPlaylist) {
+      setAddToPlaylistId(detailAddTargetPlaylist.id);
+    }
+
+    setIsPlaylistPickerOpen((current) => !current);
+  }
+
+  function selectPlaylist(playlistId: string) {
+    setSelectedPlaylistId(playlistId);
+    setSearchQuery('');
+    setProgress(0);
+    setSoundPosition(0);
+    setIsPlaying(false);
+  }
+
   function selectNextTrack() {
-    const playbackTracks = visibleTracks.length ? visibleTracks : libraryTracks;
+    const playbackTracks = visibleTracks.length ? visibleTracks : currentTracks;
 
     if (!playbackTracks.length) {
+      return;
+    }
+
+    if (isShuffle && playbackTracks.length > 1) {
+      const nextChoices = playbackTracks.filter(
+        (track) => track.id !== selectedTrackId,
+      );
+      const nextTrack =
+        nextChoices[Math.floor(Math.random() * nextChoices.length)];
+      selectTrack(nextTrack.id);
       return;
     }
 
     const currentIndex = playbackTracks.findIndex(
       (track) => track.id === selectedTrackId,
     );
-    const nextTrack = playbackTracks[(currentIndex + 1) % playbackTracks.length];
+    const nextIndex = currentIndex + 1;
+
+    if (nextIndex >= playbackTracks.length && repeatMode === 'off') {
+      setIsPlaying(false);
+      return;
+    }
+
+    const nextTrack = playbackTracks[nextIndex % playbackTracks.length];
     selectTrack(nextTrack.id);
   }
 
   function selectPreviousTrack() {
-    const playbackTracks = visibleTracks.length ? visibleTracks : libraryTracks;
+    const playbackTracks = visibleTracks.length ? visibleTracks : currentTracks;
 
     if (!playbackTracks.length) {
       return;
@@ -429,6 +663,19 @@ export default function App() {
         (currentIndex - 1 + playbackTracks.length) % playbackTracks.length
       ];
     selectTrack(previousTrack.id);
+  }
+
+  function togglePlayback() {
+    if (!audioSource) {
+      setErrorMessage('This track does not have a backend audio file yet.');
+      return;
+    }
+
+    setIsPlaying((current) => !current);
+  }
+
+  function toggleRepeatMode() {
+    setRepeatMode((current) => (current === 'one' ? 'off' : 'one'));
   }
 
   async function seekToRatio(ratio: number) {
@@ -489,6 +736,7 @@ export default function App() {
       const playlist = normalizePlaylist(payload.playlist);
       setPlaylists((current) => [playlist, ...current]);
       setSelectedPlaylistId(playlist.id);
+      setAddToPlaylistId(playlist.id);
       setNewPlaylistName('');
     } catch (error) {
       handleApiError(error);
@@ -511,7 +759,7 @@ export default function App() {
         );
 
         if (selectedPlaylistId === playlistId) {
-          setSelectedPlaylistId(nextPlaylists[0]?.id ?? '');
+          setSelectedPlaylistId('library');
         }
 
         return nextPlaylists;
@@ -521,18 +769,24 @@ export default function App() {
     }
   }
 
-  async function addCurrentTrackToPlaylist() {
-    if (!session || !selectedPlaylist) {
+  async function addCurrentTrackToPlaylist(playlistId?: string) {
+    const targetPlaylist = playlistId
+      ? playlists.find((playlist) => playlist.id === playlistId)
+      : addTargetPlaylist;
+
+    if (!session || !targetPlaylist) {
       return;
     }
 
-    if (selectedPlaylist.tracks.some((track) => track.id === selectedTrackId)) {
+    if (targetPlaylist.tracks.some((track) => track.id === selectedTrackId)) {
+      setAddToPlaylistId(targetPlaylist.id);
+      setIsPlaylistPickerOpen(false);
       return;
     }
 
     try {
       const payload = await requestAuthorizedJson<PlaylistResponse>(
-        `/playlists/${selectedPlaylist.id}/tracks/${selectedTrackId}`,
+        `/playlists/${targetPlaylist.id}/tracks/${selectedTrackId}`,
         {
           method: 'POST',
         },
@@ -544,6 +798,51 @@ export default function App() {
           candidate.id === playlist.id ? playlist : candidate,
         ),
       );
+      setAddToPlaylistId(playlist.id);
+      setIsPlaylistPickerOpen(false);
+    } catch (error) {
+      handleApiError(error);
+    }
+  }
+
+  async function createPlaylistAndAddCurrentTrack() {
+    const name = newPlaylistName.trim();
+
+    if (!session || !name) {
+      return;
+    }
+
+    try {
+      const createPayload = await requestAuthorizedJson<PlaylistResponse>(
+        '/playlists',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            name,
+          }),
+        },
+      );
+      const createdPlaylist = normalizePlaylist(createPayload.playlist);
+
+      setPlaylists((current) => [createdPlaylist, ...current]);
+      setSelectedPlaylistId(createdPlaylist.id);
+      setAddToPlaylistId(createdPlaylist.id);
+      setNewPlaylistName('');
+
+      const addPayload = await requestAuthorizedJson<PlaylistResponse>(
+        `/playlists/${createdPlaylist.id}/tracks/${selectedTrackId}`,
+        {
+          method: 'POST',
+        },
+      );
+      const playlistWithTrack = normalizePlaylist(addPayload.playlist);
+
+      setPlaylists((current) =>
+        current.map((candidate) =>
+          candidate.id === playlistWithTrack.id ? playlistWithTrack : candidate,
+        ),
+      );
+      setIsPlaylistPickerOpen(false);
     } catch (error) {
       handleApiError(error);
     }
@@ -732,7 +1031,7 @@ export default function App() {
     setFavoriteTracks([]);
     setRecentTracks([]);
     setPlaylists([]);
-    setSelectedPlaylistId('');
+    setSelectedPlaylistId('library');
     setView('login');
     setActivePanel('flow');
     setResetForm({
@@ -827,12 +1126,85 @@ export default function App() {
               ))}
             </View>
 
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.sourceScroller}
+            >
+              {sourceFilters.map(({ id, label, count }) => (
+                <Pressable
+                  key={id}
+                  onPress={() => selectPlaylist(id)}
+                  style={[
+                    styles.sourceChip,
+                    selectedPlaylistId === id ? styles.sourceChipActive : null,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.sourceChipLabel,
+                      selectedPlaylistId === id
+                        ? styles.sourceChipLabelActive
+                        : null,
+                    ]}
+                  >
+                    {label}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.sourceChipCount,
+                      selectedPlaylistId === id
+                        ? styles.sourceChipCountActive
+                        : null,
+                    ]}
+                  >
+                    {count}
+                  </Text>
+                </Pressable>
+              ))}
+              {playlists.map((playlist, index) => (
+                <Pressable
+                  key={`source-playlist-${playlist.id}-${index}`}
+                  onPress={() => selectPlaylist(playlist.id)}
+                  style={[
+                    styles.sourceChip,
+                    selectedPlaylistId === playlist.id
+                      ? styles.sourceChipActive
+                      : null,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.sourceChipLabel,
+                      selectedPlaylistId === playlist.id
+                        ? styles.sourceChipLabelActive
+                        : null,
+                    ]}
+                  >
+                    {playlist.name}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.sourceChipCount,
+                      selectedPlaylistId === playlist.id
+                        ? styles.sourceChipCountActive
+                        : null,
+                    ]}
+                  >
+                    {playlist.trackCount}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+
             {activePanel === 'flow' ? (
               <>
             <View style={styles.signalDeck}>
               <TrackArt track={selectedTrack} size="large" />
               <View style={styles.deckCopy}>
-                <Text style={styles.eyebrow}>Playing from Flow State</Text>
+                <Text style={styles.eyebrow}>
+                  Playing from {selectedSourceLabel}
+                </Text>
                 <Text style={styles.trackTitle}>{selectedTrack.title}</Text>
                 <Text style={styles.trackArtist}>
                   {selectedTrack.artist} - {selectedTrack.album}
@@ -840,20 +1212,51 @@ export default function App() {
                 <View style={styles.chipRow}>
                   <Text style={styles.chip}>{selectedTrack.mood}</Text>
                   <Text style={styles.chip}>{selectedTrack.plays} plays</Text>
-                  <Text style={styles.chip}>
-                    {isSoundLoading ? 'Loading audio' : 'Backend audio'}
-                  </Text>
+                  <Text style={styles.chip}>{selectedRuntimeLabel}</Text>
                 </View>
+                <View style={styles.heroActionRow}>
+                  <Pressable onPress={togglePlayback} style={styles.heroPlayButton}>
+                    <Ionicons
+                      color="#160f0b"
+                      name={isPlaying ? 'pause' : 'play'}
+                      size={18}
+                    />
+                    <Text style={styles.heroPlayLabel}>
+                      {isPlaying ? 'Pause' : 'Play'}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => void toggleLikeTrack(selectedTrack.id)}
+                    style={[
+                      styles.heroSubtleButton,
+                      isSelectedTrackLiked ? styles.heroSubtleButtonActive : null,
+                    ]}
+                  >
+                    <Ionicons
+                      color={isSelectedTrackLiked ? '#ff7a59' : '#fbf7ef'}
+                      name={isSelectedTrackLiked ? 'heart' : 'heart-outline'}
+                      size={18}
+                    />
+                    <Text style={styles.heroSubtleLabel}>
+                      {isSelectedTrackLiked ? 'Liked' : 'Like'}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    disabled={!addTargetPlaylist}
+                    onPress={() => void addCurrentTrackToPlaylist()}
+                    style={[
+                      styles.heroSubtleButton,
+                      !addTargetPlaylist ? styles.heroSubtleButtonDisabled : null,
+                    ]}
+                  >
+                    <Ionicons color="#fbf7ef" name="add" size={18} />
+                    <Text style={styles.heroSubtleLabel}>Add</Text>
+                  </Pressable>
+                </View>
+                {/* {isSoundLoading ? (
+                  <Text style={styles.caption}>Loading backend audio</Text>
+                ) : null} */}
               </View>
-            </View>
-
-            <View style={styles.waveCard}>
-              {waveformHeights.map((height, index) => (
-                <View
-                  key={`${height}-${index}`}
-                  style={[styles.waveBar, { height }]}
-                />
-              ))}
             </View>
 
             <View style={styles.sectionHeader}>
@@ -876,7 +1279,9 @@ export default function App() {
 
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Track runway</Text>
-              <Text style={styles.sectionAction}>Mood sort</Text>
+              <Text style={styles.sectionAction}>
+                {visibleTracks.length} tracks
+              </Text>
             </View>
             <View style={styles.trackList}>
               {visibleTracks.map((track, index) => {
@@ -884,8 +1289,8 @@ export default function App() {
 
                 return (
                   <Pressable
-                    key={track.id}
-                    onPress={() => selectTrack(track.id)}
+                    key={`runway-${track.id}-${index}`}
+                    onPress={() => openTrackDetail(track.id)}
                     style={[
                       styles.trackRow,
                       isSelected ? styles.trackRowActive : null,
@@ -938,7 +1343,9 @@ export default function App() {
                         size={19}
                       />
                     </Pressable>
-                    <Text style={styles.trackDuration}>{track.duration}</Text>
+                    <Text style={styles.trackDuration}>
+                      {durationByTrackId[track.id] ?? track.duration}
+                    </Text>
                   </Pressable>
                 );
               })}
@@ -957,10 +1364,10 @@ export default function App() {
               {visibleTracks
                 .filter((track) => track.id !== selectedTrack.id)
                 .slice(0, 3)
-                .map((track) => (
+                .map((track, index) => (
                   <Pressable
-                    key={track.id}
-                    onPress={() => selectTrack(track.id)}
+                    key={`queue-${track.id}-${index}`}
+                    onPress={() => openTrackDetail(track.id)}
                     style={styles.queueItem}
                   >
                     <TrackArt track={track} size="small" />
@@ -988,10 +1395,10 @@ export default function App() {
                 </View>
                 <View style={styles.trackList}>
                   {favoriteTracks.length ? (
-                    favoriteTracks.map((track) => (
+                    favoriteTracks.map((track, index) => (
                       <Pressable
-                        key={track.id}
-                        onPress={() => selectTrack(track.id)}
+                        key={`favorite-${track.id}-${index}`}
+                        onPress={() => openTrackDetail(track.id)}
                         style={[
                           styles.trackRow,
                           track.id === selectedTrackId
@@ -1009,7 +1416,9 @@ export default function App() {
                             {track.artist} - {track.album}
                           </Text>
                         </View>
-                        <Text style={styles.trackDuration}>{track.duration}</Text>
+                        <Text style={styles.trackDuration}>
+                          {durationByTrackId[track.id] ?? track.duration}
+                        </Text>
                       </Pressable>
                     ))
                   ) : (
@@ -1033,7 +1442,7 @@ export default function App() {
                     recentTracks.map((track, index) => (
                       <Pressable
                         key={`recent-${track.id}-${index}`}
-                        onPress={() => selectTrack(track.id)}
+                        onPress={() => openTrackDetail(track.id)}
                         style={[
                           styles.trackRow,
                           track.id === selectedTrackId
@@ -1051,7 +1460,9 @@ export default function App() {
                             {track.artist} - {track.album}
                           </Text>
                         </View>
-                        <Text style={styles.trackDuration}>{track.duration}</Text>
+                        <Text style={styles.trackDuration}>
+                          {durationByTrackId[track.id] ?? track.duration}
+                        </Text>
                       </Pressable>
                     ))
                   ) : (
@@ -1069,9 +1480,9 @@ export default function App() {
                   <Text style={styles.sectionAction}>{playlists.length} crates</Text>
                 </View>
                 <View style={styles.playlistGrid}>
-                  {playlists.map((playlist) => (
+                  {playlists.map((playlist, index) => (
                     <Pressable
-                      key={playlist.id}
+                      key={`library-playlist-${playlist.id}-${index}`}
                       onPress={() => {
                         setSelectedPlaylistId(playlist.id);
                         setActivePanel('profile');
@@ -1140,7 +1551,7 @@ export default function App() {
                     </View>
                   </View>
                   <Pressable
-                    onPress={addCurrentTrackToPlaylist}
+                    onPress={() => void addCurrentTrackToPlaylist()}
                     style={styles.secondaryAction}
                   >
                     <Ionicons color="#fbf7ef" name="add" size={18} />
@@ -1181,9 +1592,9 @@ export default function App() {
                     showsHorizontalScrollIndicator={false}
                     contentContainerStyle={styles.playlistScroller}
                   >
-                    {playlists.map((playlist) => (
+                    {playlists.map((playlist, index) => (
                       <Pressable
-                        key={playlist.id}
+                        key={`manage-playlist-${playlist.id}-${index}`}
                         onPress={() => setSelectedPlaylistId(playlist.id)}
                         style={[
                           styles.playlistChip,
@@ -1209,10 +1620,13 @@ export default function App() {
                   {selectedPlaylist ? (
                     <>
                       {selectedPlaylist.tracks.length ? (
-                        selectedPlaylist.tracks.map((track) => (
-                          <View style={styles.playlistTrackRow} key={track.id}>
+                        selectedPlaylist.tracks.map((track, index) => (
+                          <View
+                            style={styles.playlistTrackRow}
+                            key={`playlist-track-${track.id}-${index}`}
+                          >
                             <Pressable
-                              onPress={() => selectTrack(track.id)}
+                              onPress={() => openTrackDetail(track.id)}
                               style={styles.playlistTrackPressable}
                             >
                               <TrackArt track={track} size="small" />
@@ -1271,8 +1685,224 @@ export default function App() {
             ) : null}
           </ScrollView>
 
+          <Modal
+            animationType="slide"
+            onRequestClose={closeTrackDetail}
+            presentationStyle="fullScreen"
+            visible={isTrackDetailOpen}
+          >
+            <SafeAreaView style={styles.detailScreen}>
+              <View style={styles.detailHeader}>
+                <Pressable
+                  accessibilityLabel="Close track details"
+                  onPress={closeTrackDetail}
+                  style={styles.detailHeaderButton}
+                >
+                  <Ionicons color="#fbf7ef" name="chevron-down" size={24} />
+                </Pressable>
+                <View style={styles.detailHeaderCopy}>
+                  <Text style={styles.detailEyebrow}>Playing from</Text>
+                  <Text style={styles.detailSource} numberOfLines={1}>
+                    {selectedSourceLabel}
+                  </Text>
+                </View>
+                <Pressable
+                  accessibilityLabel={
+                    isSelectedTrackLiked ? 'Unlike track' : 'Like track'
+                  }
+                  onPress={() => void toggleLikeTrack(selectedTrack.id)}
+                  style={styles.detailHeaderButton}
+                >
+                  <Ionicons
+                    color={isSelectedTrackLiked ? '#ff7a59' : '#fbf7ef'}
+                    name={isSelectedTrackLiked ? 'heart' : 'heart-outline'}
+                    size={23}
+                  />
+                </Pressable>
+              </View>
+
+              <View style={styles.detailBody}>
+                <TrackArt track={selectedTrack} size="large" />
+                <View style={styles.detailTrackCopy}>
+                  <Text style={styles.detailTitle} numberOfLines={3}>
+                    {selectedTrack.title}
+                  </Text>
+                  <Text style={styles.detailArtist} numberOfLines={2}>
+                    {selectedTrack.artist} - {selectedTrack.album}
+                  </Text>
+                </View>
+                <View style={styles.chipRow}>
+                  <Text style={styles.chip}>{selectedTrack.mood}</Text>
+                  <Text style={styles.chip}>{selectedTrack.plays} plays</Text>
+                  <Text style={styles.chip}>{selectedRuntimeLabel}</Text>
+                </View>
+              </View>
+
+              <View style={styles.detailFooter}>
+                <View style={styles.progressMeta}>
+                  <Text style={styles.progressText}>
+                    {formatMillis(soundPosition)}
+                  </Text>
+                  <Pressable
+                    accessibilityLabel="Seek track"
+                    onLayout={(event) =>
+                      setProgressTrackWidth(event.nativeEvent.layout.width)
+                    }
+                    onPress={(event) =>
+                      void seekToRatio(
+                        event.nativeEvent.locationX / progressTrackWidth,
+                      )
+                    }
+                    style={styles.progressTrack}
+                  >
+                    <View
+                      style={[
+                        styles.progressFill,
+                        { width: `${progress}%` as `${number}%` },
+                      ]}
+                    />
+                  </Pressable>
+                  <Text style={styles.progressText}>{selectedRuntimeLabel}</Text>
+                </View>
+
+                <View style={styles.detailTransportRow}>
+                  <IconButton
+                    icon="shuffle"
+                    label="Shuffle"
+                    onPress={() => setIsShuffle((current) => !current)}
+                    variant={isShuffle ? 'solid' : 'ghost'}
+                  />
+                  <IconButton
+                    icon="play-skip-back"
+                    label="Previous track"
+                    onPress={selectPreviousTrack}
+                  />
+                  <Pressable
+                    accessibilityLabel={isPlaying ? 'Pause' : 'Play'}
+                    onPress={togglePlayback}
+                    style={styles.detailPlayButton}
+                  >
+                    <Ionicons
+                      color="#160f0b"
+                      name={isPlaying ? 'pause' : 'play'}
+                      size={34}
+                    />
+                  </Pressable>
+                  <IconButton
+                    icon="play-skip-forward"
+                    label="Next track"
+                    onPress={selectNextTrack}
+                  />
+                  <IconButton
+                    icon="repeat"
+                    label="Repeat one"
+                    onPress={toggleRepeatMode}
+                    variant={repeatMode === 'one' ? 'solid' : 'ghost'}
+                  />
+                </View>
+
+                <Pressable
+                  onPress={openPlaylistPicker}
+                  style={[
+                    styles.detailSecondaryAction,
+                    isPlaylistPickerOpen ? styles.detailSecondaryActionActive : null,
+                  ]}
+                >
+                  <Ionicons
+                    color="#fbf7ef"
+                    name={isPlaylistPickerOpen ? 'chevron-down' : 'add'}
+                    size={18}
+                  />
+                  <Text style={styles.secondaryActionLabel}>
+                    {isSelectedTrackInDetailTarget ? 'Added' : 'Add to playlist'}
+                  </Text>
+                </Pressable>
+
+                {isPlaylistPickerOpen ? (
+                  <View style={styles.playlistPickerPanel}>
+                    <View style={styles.sectionHeader}>
+                      <Text style={styles.sectionTitle}>Add to playlist</Text>
+                      <Text style={styles.sectionAction}>
+                        {playlists.length} crates
+                      </Text>
+                    </View>
+
+                    {playlists.length ? (
+                      <View style={styles.detailPlaylistList}>
+                        {playlists.map((playlist, index) => {
+                          const isCurrentTarget = playlist.id === addToPlaylistId;
+                          const isAlreadyAdded = playlist.tracks.some(
+                            (track) => track.id === selectedTrackId,
+                          );
+
+                          return (
+                            <Pressable
+                              key={`detail-playlist-${playlist.id}-${index}`}
+                              onPress={() => {
+                                setAddToPlaylistId(playlist.id);
+                                void addCurrentTrackToPlaylist(playlist.id);
+                              }}
+                              style={[
+                                styles.detailPlaylistItem,
+                                isCurrentTarget
+                                  ? styles.detailPlaylistItemActive
+                                  : null,
+                              ]}
+                            >
+                              <View style={styles.playlistItemIcon}>
+                                <Ionicons
+                                  color="#160f0b"
+                                  name={isAlreadyAdded ? 'checkmark' : 'musical-notes'}
+                                  size={18}
+                                />
+                              </View>
+                              <View style={styles.trackMeta}>
+                                <Text style={styles.trackName} numberOfLines={1}>
+                                  {playlist.name}
+                                </Text>
+                                <Text style={styles.trackSubtext}>
+                                  {playlist.trackCount} tracks
+                                </Text>
+                              </View>
+                              <Text style={styles.sectionAction}>
+                                {isAlreadyAdded ? 'Added' : 'Add'}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    ) : (
+                      <Text style={styles.caption}>
+                        Create a playlist to save this track.
+                      </Text>
+                    )}
+
+                    <View style={styles.createPlaylistRow}>
+                      <TextInput
+                        onChangeText={setNewPlaylistName}
+                        placeholder="New playlist"
+                        placeholderTextColor="#817873"
+                        style={[styles.input, styles.playlistInput]}
+                        value={newPlaylistName}
+                      />
+                      <Pressable
+                        onPress={createPlaylistAndAddCurrentTrack}
+                        style={styles.addButton}
+                      >
+                        <Ionicons color="#160f0b" name="add" size={22} />
+                      </Pressable>
+                    </View>
+                  </View>
+                ) : null}
+              </View>
+            </SafeAreaView>
+          </Modal>
+
           <View style={styles.nowBar}>
-            <View style={styles.nowTrack}>
+            <Pressable
+              onPress={() => setIsTrackDetailOpen(true)}
+              style={styles.nowTrack}
+            >
               <TrackArt track={selectedTrack} size="small" />
               <View style={styles.trackMeta}>
                 <Text style={styles.nowTitle} numberOfLines={1}>
@@ -1282,10 +1912,15 @@ export default function App() {
                   {selectedTrack.artist}
                 </Text>
               </View>
-            </View>
+            </Pressable>
 
             <View style={styles.transportRow}>
-              <IconButton icon="shuffle" label="Shuffle" />
+              <IconButton
+                icon="shuffle"
+                label="Shuffle"
+                onPress={() => setIsShuffle((current) => !current)}
+                variant={isShuffle ? 'solid' : 'ghost'}
+              />
               <IconButton
                 icon="play-skip-back"
                 label="Previous track"
@@ -1294,7 +1929,7 @@ export default function App() {
               <IconButton
                 icon={isPlaying ? 'pause' : 'play'}
                 label={isPlaying ? 'Pause' : 'Play'}
-                onPress={() => setIsPlaying((current) => !current)}
+                onPress={togglePlayback}
                 variant="solid"
               />
               <IconButton
@@ -1302,7 +1937,12 @@ export default function App() {
                 label="Next track"
                 onPress={selectNextTrack}
               />
-              <IconButton icon="repeat" label="Repeat" />
+              <IconButton
+                icon="repeat"
+                label="Repeat one"
+                onPress={toggleRepeatMode}
+                variant={repeatMode === 'one' ? 'solid' : 'ghost'}
+              />
             </View>
 
             <View style={styles.progressMeta}>
@@ -1328,7 +1968,7 @@ export default function App() {
                   ]}
                 />
               </Pressable>
-              <Text style={styles.progressText}>{formatMillis(soundDuration)}</Text>
+              <Text style={styles.progressText}>{selectedRuntimeLabel}</Text>
             </View>
 
           </View>
@@ -1744,6 +2384,40 @@ const styles = StyleSheet.create({
   panelTabLabelActive: {
     color: '#0b121a',
   },
+  sourceScroller: {
+    gap: 8,
+    paddingRight: 16,
+  },
+  sourceChip: {
+    alignItems: 'center',
+    borderColor: 'rgba(248,244,236,0.14)',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 38,
+    paddingHorizontal: 13,
+  },
+  sourceChipActive: {
+    backgroundColor: '#fbf7ef',
+    borderColor: '#fbf7ef',
+  },
+  sourceChipLabel: {
+    color: '#d8d0c8',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  sourceChipLabelActive: {
+    color: '#120f18',
+  },
+  sourceChipCount: {
+    color: '#b8afaa',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  sourceChipCountActive: {
+    color: '#4b3f36',
+  },
   previewDeck: {
     alignItems: 'flex-start',
     backgroundColor: 'rgba(29,23,35,0.86)',
@@ -1921,6 +2595,50 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     paddingHorizontal: 10,
     paddingVertical: 7,
+  },
+  heroActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    justifyContent: 'center',
+    marginTop: 6,
+  },
+  heroPlayButton: {
+    alignItems: 'center',
+    backgroundColor: '#f5c15d',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 42,
+    paddingHorizontal: 17,
+  },
+  heroPlayLabel: {
+    color: '#160f0b',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  heroSubtleButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(248,244,236,0.07)',
+    borderColor: 'rgba(248,244,236,0.12)',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 7,
+    minHeight: 42,
+    paddingHorizontal: 14,
+  },
+  heroSubtleButtonActive: {
+    backgroundColor: 'rgba(255,122,89,0.13)',
+    borderColor: 'rgba(255,122,89,0.28)',
+  },
+  heroSubtleButtonDisabled: {
+    opacity: 0.45,
+  },
+  heroSubtleLabel: {
+    color: '#fbf7ef',
+    fontSize: 13,
+    fontWeight: '900',
   },
   waveCard: {
     alignItems: 'flex-end',
@@ -2219,6 +2937,138 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '900',
     textDecorationLine: 'underline',
+  },
+  detailScreen: {
+    backgroundColor: '#120f18',
+    flex: 1,
+    paddingHorizontal: isSmallScreen ? 18 : 24,
+    paddingVertical: 16,
+  },
+  detailHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 52,
+  },
+  detailHeaderButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(248,244,236,0.07)',
+    borderColor: 'rgba(248,244,236,0.12)',
+    borderRadius: 999,
+    borderWidth: 1,
+    height: 44,
+    justifyContent: 'center',
+    width: 44,
+  },
+  detailHeaderCopy: {
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 14,
+  },
+  detailEyebrow: {
+    color: '#55d6c2',
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  detailSource: {
+    color: '#fbf7ef',
+    fontSize: 14,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  detailBody: {
+    alignItems: 'center',
+    flex: 1,
+    gap: 16,
+    justifyContent: 'center',
+  },
+  detailTrackCopy: {
+    alignItems: 'center',
+    gap: 8,
+    width: '100%',
+  },
+  detailTitle: {
+    color: '#fbf7ef',
+    fontSize: isSmallScreen ? 27 : 32,
+    fontWeight: '900',
+    lineHeight: isSmallScreen ? 32 : 37,
+    textAlign: 'center',
+  },
+  detailArtist: {
+    color: '#b8afaa',
+    fontSize: 15,
+    lineHeight: 22,
+    textAlign: 'center',
+  },
+  detailFooter: {
+    gap: 14,
+    paddingBottom: 12,
+  },
+  detailTransportRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: isSmallScreen ? 13 : 17,
+    justifyContent: 'center',
+  },
+  detailPlayButton: {
+    alignItems: 'center',
+    backgroundColor: '#f5c15d',
+    borderRadius: 999,
+    height: isSmallScreen ? 68 : 76,
+    justifyContent: 'center',
+    width: isSmallScreen ? 68 : 76,
+  },
+  detailSecondaryAction: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    backgroundColor: 'rgba(248,244,236,0.07)',
+    borderColor: 'rgba(248,244,236,0.12)',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    minHeight: 44,
+    paddingHorizontal: 16,
+  },
+  detailSecondaryActionActive: {
+    backgroundColor: 'rgba(85,214,194,0.13)',
+    borderColor: 'rgba(85,214,194,0.28)',
+  },
+  playlistPickerPanel: {
+    backgroundColor: 'rgba(248,244,236,0.055)',
+    borderColor: 'rgba(248,244,236,0.12)',
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 12,
+    padding: 14,
+  },
+  detailPlaylistList: {
+    gap: 8,
+    maxHeight: 180,
+  },
+  detailPlaylistItem: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(8,12,18,0.42)',
+    borderColor: 'rgba(248,244,236,0.1)',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 56,
+    paddingHorizontal: 10,
+  },
+  detailPlaylistItemActive: {
+    borderColor: 'rgba(85,214,194,0.34)',
+  },
+  playlistItemIcon: {
+    alignItems: 'center',
+    backgroundColor: '#f5c15d',
+    borderRadius: 8,
+    height: 38,
+    justifyContent: 'center',
+    width: 38,
   },
   nowBar: {
     backgroundColor: 'rgba(8,12,18,0.96)',

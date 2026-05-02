@@ -1,4 +1,13 @@
-import { Dimensions, StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  Dimensions,
+  Image,
+  StyleProp,
+  StyleSheet,
+  View,
+  ViewStyle,
+} from 'react-native';
+import { apiBaseUrl } from '../config';
 import type { CoverClass, MusicTrack } from '../types';
 
 const screenWidth = Dimensions.get('window').width;
@@ -24,11 +33,32 @@ export function TrackArt({
   size = 'medium',
   style,
 }: {
-  track: Pick<MusicTrack, 'coverClass'>;
+  track: Pick<MusicTrack, 'coverClass'> & Partial<Pick<MusicTrack, 'coverUrl'>>;
   size?: 'small' | 'medium' | 'large';
   style?: StyleProp<ViewStyle>;
 }) {
   const palette = coverPalettes[track.coverClass];
+  const [hasImageError, setHasImageError] = useState(false);
+  const imageSource = useMemo(() => {
+    if (!track.coverUrl) {
+      return null;
+    }
+
+    const normalizedCoverUrl = track.coverUrl.startsWith('http')
+      ? track.coverUrl
+      : track.coverUrl.startsWith('/')
+        ? track.coverUrl
+        : `/${track.coverUrl}`;
+
+    return normalizedCoverUrl.startsWith('http')
+      ? normalizedCoverUrl
+      : `${apiBaseUrl}${normalizedCoverUrl}`;
+  }, [track.coverUrl]);
+  const shouldShowImage = Boolean(imageSource && !hasImageError);
+
+  useEffect(() => {
+    setHasImageError(false);
+  }, [imageSource]);
 
   return (
     <View
@@ -43,9 +73,21 @@ export function TrackArt({
         style,
       ]}
     >
-      <View style={[styles.artFrame, { borderColor: palette.accent }]} />
-      <View style={[styles.artCircle, { backgroundColor: palette.accent }]} />
-      <View style={styles.artLine} />
+      {shouldShowImage && imageSource ? (
+        <Image
+          accessibilityIgnoresInvertColors
+          onError={() => setHasImageError(true)}
+          resizeMode="cover"
+          source={{ uri: imageSource }}
+          style={styles.coverImage}
+        />
+      ) : (
+        <>
+          <View style={[styles.artFrame, { borderColor: palette.accent }]} />
+          <View style={[styles.artCircle, { backgroundColor: palette.accent }]} />
+          <View style={styles.artLine} />
+        </>
+      )}
     </View>
   );
 }
@@ -53,6 +95,10 @@ export function TrackArt({
 const styles = StyleSheet.create({
   trackArt: {
     overflow: 'hidden',
+  },
+  coverImage: {
+    height: '100%',
+    width: '100%',
   },
   trackArtSmall: {
     borderRadius: 8,

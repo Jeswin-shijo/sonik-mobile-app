@@ -3,6 +3,7 @@ import { ComponentProps } from 'react';
 
 export type AuthView = 'login' | 'register' | 'forgot' | 'reset';
 export type ActivePanel = 'flow' | 'library' | 'profile';
+export type RepeatMode = 'off' | 'one';
 export type CoverClass = 'neon' | 'coast' | 'velvet' | 'summer' | 'blue';
 export type IconName = ComponentProps<typeof Ionicons>['name'];
 
@@ -49,6 +50,7 @@ export type MusicTrack = {
   plays: string;
   mood: string;
   coverClass: CoverClass;
+  coverUrl?: string | null;
   audio?: number;
   streamUrl?: string;
 };

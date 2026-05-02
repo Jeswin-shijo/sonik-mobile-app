@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="sonikGradient" x1="128" x2="896" y1="128" y2="896">
+      <stop stop-color="#f5c15d" />
+      <stop offset="0.52" stop-color="#ff7a59" />
+      <stop offset="1" stop-color="#9d85ff" />
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="236" fill="#120f18" />
+  <circle cx="512" cy="512" r="360" fill="url(#sonikGradient)" />
+  <path
+    d="M665 392c-36-46-94-71-160-71-99 0-169 48-169 126 0 85 80 106 164 119 69 10 95 20 95 48 0 31-34 49-88 49-59 0-103-21-134-59l-79 66c46 58 119 89 211 89 113 0 192-52 192-143 0-93-83-115-172-128-64-9-88-18-88-44 0-25 27-40 68-40 43 0 77 14 104 45l56-57Z"
+    fill="#150d12"
+  />
+</svg>

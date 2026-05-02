@@ -1,4 +1,16 @@
-import type { ApiPlaylist, ApiTrack, CoverClass, MusicTrack, Playlist } from '../types';
+import type {
+  Album,
+  ApiAlbum,
+  ApiArtist,
+  ApiPlaylist,
+  ApiQueueItem,
+  ApiTrack,
+  Artist,
+  CoverClass,
+  MusicTrack,
+  Playlist,
+  QueueItem,
+} from '../types';
 
 export function normalizeCoverClass(coverClass: string): CoverClass {
   const normalized = coverClass.replace(/^cover-/, '');
@@ -30,6 +42,27 @@ export function normalizePlaylist(playlist: ApiPlaylist): Playlist {
   return {
     ...playlist,
     tracks: playlist.tracks.map(normalizeTrack),
+  };
+}
+
+export function normalizeArtist(artist: ApiArtist): Artist {
+  return {
+    ...artist,
+    tracks: artist.tracks.map(normalizeTrack),
+  };
+}
+
+export function normalizeAlbum(album: ApiAlbum): Album {
+  return {
+    ...album,
+    tracks: album.tracks.map(normalizeTrack),
+  };
+}
+
+export function normalizeQueueItem(queueItem: ApiQueueItem): QueueItem {
+  return {
+    ...queueItem,
+    track: normalizeTrack(queueItem.track),
   };
 }
 

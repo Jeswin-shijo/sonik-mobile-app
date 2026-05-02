@@ -6,7 +6,10 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "build:apk": "npx eas-cli build --platform android --profile apk",
+    "build:apk:local": "npx eas-cli build --platform android --profile apk --local",
+    "build:apk:share": "mkdir -p build && npx eas-cli build --platform android --profile apk --local --output ./build/sonik-mobile-app.apk"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -17,6 +20,7 @@
     "expo": "~54.0.33",
     "expo-audio": "~1.1.1",
     "expo-auth-session": "~7.0.11",
+    "expo-document-picker": "~14.0.8",
     "expo-file-system": "~19.0.22",
     "expo-media-library": "~18.2.1",
     "expo-router": "~6.0.23",

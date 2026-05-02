@@ -1,17 +1,21 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { ComponentProps } from 'react';
 
-export type AuthView = 'login' | 'register' | 'forgot' | 'reset';
+export type AuthView = 'login' | 'register-otp' | 'forgot-otp';
 export type ActivePanel = 'flow' | 'library' | 'profile';
 export type RepeatMode = 'off' | 'one';
 export type CoverClass = 'neon' | 'coast' | 'velvet' | 'summer' | 'blue';
 export type IconName = ComponentProps<typeof Ionicons>['name'];
+export type ThemeMode = 'dark' | 'light';
+
+export type UserRole = 'user' | 'admin';
 
 export type SessionUser = {
   id: number;
   email: string;
   profileName: string;
   authProvider: 'local' | 'google' | 'hybrid';
+  role: UserRole;
   googleConnected: boolean;
   createdAt: string;
   updatedAt: string;
@@ -63,13 +67,55 @@ export type Playlist = {
   tracks: MusicTrack[];
 };
 
+export type Artist = {
+  id: string;
+  name: string;
+  trackCount: number;
+  albumCount: number;
+  tracks: MusicTrack[];
+};
+
+export type Album = {
+  id: string;
+  title: string;
+  artist: string;
+  trackCount: number;
+  tracks: MusicTrack[];
+};
+
+export type QueueItem = {
+  id: string;
+  position: number;
+  track: MusicTrack;
+};
+
 export type ApiTrack = Omit<MusicTrack, 'coverClass' | 'audio' | 'durationMs'> & {
   coverClass: string;
   coverUrl?: string | null;
 };
 
+export type ApiArtist = Omit<Artist, 'tracks'> & {
+  tracks: ApiTrack[];
+};
+
+export type ApiAlbum = Omit<Album, 'tracks'> & {
+  tracks: ApiTrack[];
+};
+
+export type ApiQueueItem = Omit<QueueItem, 'track'> & {
+  track: ApiTrack;
+};
+
 export type TracksResponse = {
   tracks: ApiTrack[];
+};
+
+export type ArtistsResponse = {
+  artists: ApiArtist[];
+};
+
+export type AlbumsResponse = {
+  albums: ApiAlbum[];
 };
 
 export type PlaylistsResponse = {
@@ -78,6 +124,15 @@ export type PlaylistsResponse = {
 
 export type PlaylistResponse = {
   playlist: ApiPlaylist;
+};
+
+export type QueueResponse = {
+  queue: ApiQueueItem[];
+};
+
+export type QueueActionResponse = QueueResponse & {
+  queueItem: ApiQueueItem;
+  message: string;
 };
 
 export type ApiPlaylist = {

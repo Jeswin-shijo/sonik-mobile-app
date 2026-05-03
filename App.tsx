@@ -2,6 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Google from 'expo-auth-session/providers/google';
 import * as DocumentPicker from 'expo-document-picker';
+import { LinearGradient } from 'expo-linear-gradient';
 import {
   createAudioPlayer,
   setAudioModeAsync,
@@ -1162,6 +1163,7 @@ export default function App() {
 
     selectArtist(actionArtist.id);
     closeTrackActionSheet();
+    closeTrackDetail();
   }
 
   function goToActionAlbum() {
@@ -1171,6 +1173,7 @@ export default function App() {
 
     selectAlbum(actionAlbum.id);
     closeTrackActionSheet();
+    closeTrackDetail();
   }
 
   async function createPlaylistAndAddCurrentTrack() {
@@ -1624,9 +1627,14 @@ export default function App() {
       <SafeAreaView style={styles.safeArea}>
         <StatusBar style={themeMode === 'dark' ? 'light' : 'dark'} />
         <View style={styles.bootCard}>
-          <View style={styles.brandMark}>
+          <LinearGradient
+            colors={[theme.accent, theme.secondary]}
+            end={{ x: 1, y: 1 }}
+            start={{ x: 0, y: 0 }}
+            style={styles.brandMark}
+          >
             <Text style={styles.brandMarkText}>S</Text>
-          </View>
+          </LinearGradient>
           <ActivityIndicator color={theme.secondary} />
           <Text style={styles.bootText}>Opening Sonik</Text>
         </View>
@@ -1810,9 +1818,14 @@ export default function App() {
           >
             <View style={styles.appHeader}>
               <View style={styles.brandRow}>
-                <View style={styles.brandMark}>
+                <LinearGradient
+                  colors={[theme.accent, theme.secondary]}
+                  end={{ x: 1, y: 1 }}
+                  start={{ x: 0, y: 0 }}
+                  style={styles.brandMark}
+                >
                   <Text style={styles.brandMarkText}>S</Text>
-                </View>
+                </LinearGradient>
                 <Text style={styles.brandName}>Sonik</Text>
               </View>
               <View style={styles.headerActions}>
@@ -1979,6 +1992,12 @@ export default function App() {
                 </View>
                 <View style={styles.heroActionRow}>
                   <Pressable onPress={togglePlayback} style={styles.heroPlayButton}>
+                    <LinearGradient
+                      colors={[theme.accent, theme.secondary]}
+                      end={{ x: 1, y: 1 }}
+                      start={{ x: 0, y: 0 }}
+                      style={StyleSheet.absoluteFill}
+                    />
                     <Ionicons
                       color={theme.accentText}
                       name={isPlaying ? 'pause' : 'play'}
@@ -2385,6 +2404,12 @@ export default function App() {
                       value={newPlaylistName}
                     />
                     <Pressable onPress={createPlaylist} style={styles.addButton}>
+                      <LinearGradient
+                        colors={[theme.accent, theme.secondary]}
+                        end={{ x: 1, y: 1 }}
+                        start={{ x: 0, y: 0 }}
+                        style={StyleSheet.absoluteFill}
+                      />
                       <Ionicons color={theme.accentText} name="add" size={22} />
                     </Pressable>
                   </View>
@@ -2513,16 +2538,24 @@ export default function App() {
                   {session.user.role === 'admin' ? (
                     <Pressable
                       onPress={() => setIsAdminViewOpen(true)}
-                      style={[styles.deletePlaylistButton, styles.adminButton]}
+                      style={({ pressed }) => [
+                        styles.adminButton,
+                        pressed && styles.adminButtonPressed,
+                      ]}
                     >
-                      <Ionicons
-                        color={theme.text}
-                        name="cloud-upload-outline"
-                        size={18}
-                      />
-                      <Text style={[styles.deletePlaylistText, styles.adminButtonText]}>
-                        Admin panel
-                      </Text>
+                      <LinearGradient
+                        colors={[theme.accent, theme.secondary]}
+                        end={{ x: 1, y: 1 }}
+                        start={{ x: 0, y: 0 }}
+                        style={styles.adminButtonGradient}
+                      >
+                        <Ionicons
+                          color={theme.accentText}
+                          name="cloud-upload"
+                          size={14}
+                        />
+                        <Text style={styles.adminButtonText}>Admin panel</Text>
+                      </LinearGradient>
                     </Pressable>
                   ) : null}
                 </View>
@@ -2531,7 +2564,7 @@ export default function App() {
           </ScrollView>
 
           <Modal
-            animationType="fade"
+            animationType="slide"
             onRequestClose={closeTrackActionSheet}
             transparent
             visible={isTrackActionSheetOpen}
@@ -2544,6 +2577,7 @@ export default function App() {
                 onPress={(event) => event.stopPropagation()}
                 style={styles.actionSheet}
               >
+                <View style={styles.sheetDragHandle} />
                 {actionTrack ? (
                   <>
                     <View style={styles.actionSheetHeader}>
@@ -2557,6 +2591,7 @@ export default function App() {
                         </Text>
                       </View>
                     </View>
+                    <View style={styles.sheetDivider} />
 
                     {actionSheetMode === 'actions' ? (
                       <View style={styles.actionSheetList}>
@@ -2731,19 +2766,32 @@ export default function App() {
                     {selectedSourceLabel}
                   </Text>
                 </View>
-                <Pressable
-                  accessibilityLabel={
-                    isSelectedTrackLiked ? 'Unlike track' : 'Like track'
-                  }
-                  onPress={() => void toggleLikeTrack(selectedTrack.id)}
-                  style={styles.detailHeaderButton}
-                >
-                  <Ionicons
-                    color={isSelectedTrackLiked ? '#ff7a59' : theme.text}
-                    name={isSelectedTrackLiked ? 'heart' : 'heart-outline'}
-                    size={23}
-                  />
-                </Pressable>
+                <View style={styles.detailHeaderActions}>
+                  <Pressable
+                    accessibilityLabel={
+                      isSelectedTrackLiked ? 'Unlike track' : 'Like track'
+                    }
+                    onPress={() => void toggleLikeTrack(selectedTrack.id)}
+                    style={styles.detailHeaderButton}
+                  >
+                    <Ionicons
+                      color={isSelectedTrackLiked ? '#ff7a59' : theme.text}
+                      name={isSelectedTrackLiked ? 'heart' : 'heart-outline'}
+                      size={23}
+                    />
+                  </Pressable>
+                  <Pressable
+                    accessibilityLabel="More actions"
+                    onPress={() => openTrackActionSheet(selectedTrack.id)}
+                    style={styles.detailHeaderButton}
+                  >
+                    <Ionicons
+                      color={theme.text}
+                      name="ellipsis-vertical"
+                      size={20}
+                    />
+                  </Pressable>
+                </View>
               </View>
 
               <View style={styles.detailBody}>
@@ -2809,6 +2857,12 @@ export default function App() {
                     onPress={togglePlayback}
                     style={styles.detailPlayButton}
                   >
+                    <LinearGradient
+                      colors={[theme.accent, theme.secondary]}
+                      end={{ x: 1, y: 1 }}
+                      start={{ x: 0, y: 0 }}
+                      style={StyleSheet.absoluteFill}
+                    />
                     <Ionicons
                       color={theme.accentText}
                       name={isPlaying ? 'pause' : 'play'}
@@ -2918,6 +2972,12 @@ export default function App() {
                         onPress={createPlaylistAndAddCurrentTrack}
                         style={styles.addButton}
                       >
+                        <LinearGradient
+                          colors={[theme.accent, theme.secondary]}
+                          end={{ x: 1, y: 1 }}
+                          start={{ x: 0, y: 0 }}
+                          style={StyleSheet.absoluteFill}
+                        />
                         <Ionicons color={theme.accentText} name="add" size={22} />
                       </Pressable>
                     </View>
@@ -3080,9 +3140,14 @@ export default function App() {
       >
         <View style={styles.appHeader}>
           <View style={styles.brandRow}>
-            <View style={styles.brandMark}>
+            <LinearGradient
+              colors={[theme.accent, theme.secondary]}
+              end={{ x: 1, y: 1 }}
+              start={{ x: 0, y: 0 }}
+              style={styles.brandMark}
+            >
               <Text style={styles.brandMarkText}>S</Text>
-            </View>
+            </LinearGradient>
             <Text style={styles.brandName}>Sonik</Text>
           </View>
           <Pressable
@@ -3505,10 +3570,10 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
   },
   brandMark: {
     alignItems: 'center',
-    backgroundColor: theme.accent,
     borderRadius: 999,
     height: 40,
     justifyContent: 'center',
+    overflow: 'hidden',
     width: 40,
   },
   brandMarkText: {
@@ -3822,11 +3887,11 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
   },
   heroPlayButton: {
     alignItems: 'center',
-    backgroundColor: theme.accent,
     borderRadius: 999,
     flexDirection: 'row',
     gap: 8,
     minHeight: 42,
+    overflow: 'hidden',
     paddingHorizontal: 17,
   },
   heroPlayLabel: {
@@ -4111,10 +4176,10 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
   },
   addButton: {
     alignItems: 'center',
-    backgroundColor: theme.accent,
     borderRadius: 999,
     height: 52,
     justifyContent: 'center',
+    overflow: 'hidden',
     width: 52,
   },
   playlistScroller: {
@@ -4182,21 +4247,26 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
     fontWeight: '600',
   },
   adminButton: {
+    alignSelf: 'center',
+    borderRadius: 999,
+    marginTop: 8,
+    overflow: 'hidden',
+  },
+  adminButtonPressed: {
+    opacity: 0.85,
+  },
+  adminButtonGradient: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 8,
-    justifyContent: 'center',
-    paddingVertical: 12,
-    marginTop: 8,
-    borderColor: theme.border,
-    borderWidth: 1,
-    borderRadius: 999,
-    backgroundColor: theme.surfaceSoft,
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
   },
   adminButtonText: {
-    color: theme.text,
-    textDecorationLine: 'none',
-    fontWeight: '700',
+    color: theme.accentText,
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.2,
   },
   adminContent: {
     paddingHorizontal: 16,
@@ -4381,48 +4451,58 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
     fontWeight: '700',
   },
   sheetBackdrop: {
-    backgroundColor: 'rgba(0,0,0,0.46)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     flex: 1,
     justifyContent: 'flex-end',
   },
   actionSheet: {
     backgroundColor: theme.surfaceStrong,
-    borderColor: theme.borderStrong,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    borderWidth: 1,
-    gap: 14,
-    maxHeight: '78%',
-    paddingHorizontal: isSmallScreen ? 14 : 18,
-    paddingTop: 16,
-    paddingBottom: 26,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    maxHeight: '82%',
+    paddingHorizontal: 4,
+    paddingTop: 8,
+    paddingBottom: 18,
+  },
+  sheetDragHandle: {
+    alignSelf: 'center',
+    backgroundColor: theme.borderStrong,
+    borderRadius: 999,
+    height: 4,
+    marginBottom: 12,
+    width: 36,
   },
   actionSheetHeader: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 10,
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 4,
+  },
+  sheetDivider: {
+    backgroundColor: theme.border,
+    height: 1,
+    marginHorizontal: 16,
+    marginVertical: 8,
   },
   actionSheetList: {
-    gap: 8,
+    gap: 0,
   },
   actionSheetOption: {
     alignItems: 'center',
-    backgroundColor: theme.surfaceSoft,
-    borderColor: theme.border,
-    borderRadius: 8,
-    borderWidth: 1,
+    backgroundColor: 'transparent',
     flexDirection: 'row',
-    gap: 12,
+    gap: 18,
     minHeight: 52,
-    paddingHorizontal: 13,
+    paddingHorizontal: 20,
   },
   actionSheetOptionDisabled: {
-    opacity: 0.45,
+    opacity: 0.4,
   },
   actionSheetOptionText: {
     color: theme.text,
-    fontSize: 14,
-    fontWeight: '900',
+    fontSize: 15,
+    fontWeight: '600',
   },
   detailScreen: {
     backgroundColor: theme.background,
@@ -4435,6 +4515,11 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     minHeight: 52,
+  },
+  detailHeaderActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
   },
   detailHeaderButton: {
     alignItems: 'center',
@@ -4500,10 +4585,10 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
   },
   detailPlayButton: {
     alignItems: 'center',
-    backgroundColor: theme.accent,
     borderRadius: 999,
     height: isSmallScreen ? 68 : 76,
     justifyContent: 'center',
+    overflow: 'hidden',
     width: isSmallScreen ? 68 : 76,
   },
   detailSecondaryAction: {

@@ -264,6 +264,10 @@ export default function App() {
     otp: '',
   });
   const [otpStep, setOtpStep] = useState<'email' | 'verify'>('email');
+  const [emailStatus, setEmailStatus] = useState<
+    'idle' | 'checking' | 'available' | 'taken'
+  >('idle');
+  const emailCheckTimer = useRef<ReturnType<typeof setTimeout>>();
   const [isDeleteAccountConfirming, setIsDeleteAccountConfirming] = useState(false);
   const [isAdminViewOpen, setIsAdminViewOpen] = useState(false);
   const [adminUploadForm, setAdminUploadForm] = useState({
@@ -713,8 +717,34 @@ export default function App() {
     playerStatus.duration,
     playerStatus.isLoaded,
     playerStatus.playing,
+    playerStatus.playing,
     session,
   ]);
+
+  useEffect(() => {
+    if (view !== 'register-otp' || otpStep !== 'email') {
+      return;
+    }
+    const email = otpForm.email.trim();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setEmailStatus('idle');
+      return;
+    }
+    setEmailStatus('checking');
+    clearTimeout(emailCheckTimer.current);
+    emailCheckTimer.current = setTimeout(async () => {
+      try {
+        const response = await fetch(
+          `${apiBaseUrl}/auth/check-email?email=${encodeURIComponent(email)}`,
+        );
+        const data = await response.json();
+        setEmailStatus(data.available ? 'available' : 'taken');
+      } catch {
+        setEmailStatus('idle');
+      }
+    }, 500);
+    return () => clearTimeout(emailCheckTimer.current);
+  }, [otpForm.email, view, otpStep]);
 
   function clearFeedback() {
     setErrorMessage('');
@@ -1318,6 +1348,9 @@ export default function App() {
       }
       if (registerForm.password !== registerForm.confirmPassword) {
         setErrorMessage('Passwords do not match.');
+        return;
+      }
+      if (emailStatus === 'taken') {
         return;
       }
     }
@@ -3327,6 +3360,15 @@ export default function App() {
                     style={styles.input}
                     value={otpForm.email}
                   />
+                  {emailStatus === 'checking' && (
+                    <Text style={{ color: theme.muted, marginTop: 4, fontSize: 13, alignSelf: 'flex-start', paddingLeft: 16 }}>Checking availability…</Text>
+                  )}
+                  {emailStatus === 'taken' && (
+                    <Text style={{ color: theme.danger, marginTop: 4, fontSize: 13, alignSelf: 'flex-start', paddingLeft: 16 }}>This email is already registered. Please sign in instead.</Text>
+                  )}
+                  {emailStatus === 'available' && (
+                    <Text style={{ color: theme.secondary, marginTop: 4, fontSize: 13, alignSelf: 'flex-start', paddingLeft: 16 }}>✓ Email is available</Text>
+                  )}
                   <TextInput
                     autoCapitalize="none"
                     autoComplete="new-password"
@@ -3358,11 +3400,31 @@ export default function App() {
                     value={registerForm.confirmPassword}
                   />
                   <Pressable
-                    disabled={isSubmitting}
+                    disabled={
+                      isSubmitting ||
+                      !registerForm.profileName ||
+                      !otpForm.email ||
+                      !registerForm.password ||
+                      !registerForm.confirmPassword ||
+                      registerForm.password !== registerForm.confirmPassword ||
+                      emailStatus === 'checking' ||
+                      emailStatus === 'taken'
+                    }
                     onPress={() => {
                       void handleSendOtp('signup');
                     }}
-                    style={styles.primaryButton}
+                    style={[
+                      styles.primaryButton,
+                      (isSubmitting ||
+                        !registerForm.profileName ||
+                        !otpForm.email ||
+                        !registerForm.password ||
+                        !registerForm.confirmPassword ||
+                        registerForm.password !== registerForm.confirmPassword ||
+                        emailStatus === 'checking' ||
+                        emailStatus === 'taken') &&
+                        styles.disabledButton,
+                    ]}
                   >
                     <Text style={styles.primaryButtonLabel}>
                       {isSubmitting ? 'Sending code' : 'Send verification code'}

@@ -267,7 +267,7 @@ export default function App() {
   const [emailStatus, setEmailStatus] = useState<
     'idle' | 'checking' | 'available' | 'taken'
   >('idle');
-  const emailCheckTimer = useRef<ReturnType<typeof setTimeout>>();
+  const emailCheckTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [isDeleteAccountConfirming, setIsDeleteAccountConfirming] = useState(false);
   const [isAdminViewOpen, setIsAdminViewOpen] = useState(false);
   const [adminUploadForm, setAdminUploadForm] = useState({

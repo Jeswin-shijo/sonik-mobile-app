@@ -1,6 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Google from 'expo-auth-session/providers/google';
+import { BlurView } from 'expo-blur';
 import * as DocumentPicker from 'expo-document-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
@@ -15,8 +16,12 @@ import * as WebBrowser from 'expo-web-browser';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   Dimensions,
+  Easing,
+  Image,
   Modal,
+  PanResponder,
   Pressable,
   Share,
   ScrollView,
@@ -24,13 +29,18 @@ import {
   Text,
   TextInput,
   useColorScheme,
+  type GestureResponderEvent,
+  type LayoutChangeEvent,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { getFriendlyError, requestJson } from './src/api/client';
 import { IconButton } from './src/components/IconButton';
+import { LibraryCollectionCard } from './src/components/LibraryCollectionCard';
 import { OtpInput } from './src/components/OtpInput';
 import { TrackArt } from './src/components/TrackArt';
+import { languageOptions } from './src/constants/languages';
+import { bottomTabs } from './src/constants/navigation';
 import {
   apiBaseUrl,
   googleAndroidClientId,
@@ -38,7 +48,7 @@ import {
   googleWebClientId,
   sessionStorageKey,
 } from './src/config';
-import { fallbackTracks, mixes, waveformHeights } from './src/data/tracks';
+import { fallbackTracks, waveformHeights } from './src/data/tracks';
 import type {
   ActivePanel,
   Album,
@@ -60,7 +70,11 @@ import type {
   SessionUser,
   ThemeMode,
   TracksResponse,
+  Singer,
+  Lyricist,
 } from './src/types';
+import { buildAlbumsFromTracks, buildArtistsFromTracks } from './src/utils/library';
+import { getTranslation } from './src/utils/translations';
 import {
   formatMillis,
   getRuntimeLabel,
@@ -74,10 +88,15 @@ import {
 
 WebBrowser.maybeCompleteAuthSession();
 
+const AnimatedBlurView = Animated.createAnimatedComponent(BlurView);
+
 // Responsive design utilities
 const screenWidth = Dimensions.get('window').width;
+const screenHeight = Dimensions.get('window').height;
 const isSmallScreen = screenWidth < 380;
 const isMediumScreen = screenWidth >= 380 && screenWidth < 480;
+const collapsedPlayerTop = screenHeight - (isSmallScreen ? 138 : 146);
+const detailBackgroundFadeHeight = isSmallScreen ? 132 : 160;
 const themeStorageKey = 'sonik-theme-mode';
 
 type AppTheme = {
@@ -153,51 +172,6 @@ function getAudioSourceForTrack(
   return track.audio ?? null;
 }
 
-function buildArtistsFromTracks(tracks: MusicTrack[]): Artist[] {
-  const artistsByName = new Map<string, MusicTrack[]>();
-
-  tracks.forEach((track) => {
-    const artistTracks = artistsByName.get(track.artist) ?? [];
-    artistTracks.push(track);
-    artistsByName.set(track.artist, artistTracks);
-  });
-
-  return [...artistsByName.entries()]
-    .map(([name, artistTracks], index) => ({
-      id: `artist-${index}-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
-      name,
-      trackCount: artistTracks.length,
-      albumCount: new Set(artistTracks.map((track) => track.album)).size,
-      tracks: artistTracks,
-    }))
-    .sort((first, second) => first.name.localeCompare(second.name));
-}
-
-function buildAlbumsFromTracks(tracks: MusicTrack[]): Album[] {
-  const albumsByKey = new Map<string, MusicTrack[]>();
-
-  tracks.forEach((track) => {
-    const key = `${track.album}\u0000${track.artist}`;
-    const albumTracks = albumsByKey.get(key) ?? [];
-    albumTracks.push(track);
-    albumsByKey.set(key, albumTracks);
-  });
-
-  return [...albumsByKey.entries()]
-    .map(([key, albumTracks], index) => {
-      const [title, artist] = key.split('\u0000');
-
-      return {
-        id: `album-${index}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
-        title,
-        artist,
-        trackCount: albumTracks.length,
-        tracks: albumTracks,
-      };
-    })
-    .sort((first, second) => first.title.localeCompare(second.title));
-}
-
 export default function App() {
   const systemColorScheme = useColorScheme();
   const completedTrackRef = useRef('');
@@ -218,10 +192,13 @@ export default function App() {
   const [artists, setArtists] = useState<Artist[]>(
     buildArtistsFromTracks(fallbackTracks),
   );
+  const [singers, setSingers] = useState<Singer[]>([]);
+  const [lyricists, setLyricists] = useState<Lyricist[]>([]);
   const [albums, setAlbums] = useState<Album[]>(
     buildAlbumsFromTracks(fallbackTracks),
   );
   const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isTrackDetailOpen, setIsTrackDetailOpen] = useState(false);
   const [isPlaylistPickerOpen, setIsPlaylistPickerOpen] = useState(false);
   const [isTrackActionSheetOpen, setIsTrackActionSheetOpen] = useState(false);
@@ -269,20 +246,84 @@ export default function App() {
   >('idle');
   const emailCheckTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [isDeleteAccountConfirming, setIsDeleteAccountConfirming] = useState(false);
-  const [isAdminViewOpen, setIsAdminViewOpen] = useState(false);
-  const [adminUploadForm, setAdminUploadForm] = useState({
-    title: '',
-    artist: '',
-    album: '',
-    genre: '',
-    mood: '',
+  const [likedPulseTrackId, setLikedPulseTrackId] = useState('');
+  const tabSwitchAnim = useRef(new Animated.Value(0)).current;
+  const contentSwitchAnim = useRef(new Animated.Value(1)).current;
+  const likeScaleAnim = useRef(new Animated.Value(1)).current;
+  const miniPlayerDragY = useRef(new Animated.Value(0)).current;
+  const playerSheetY = useRef(new Animated.Value(collapsedPlayerTop)).current;
+  const playerSheetOpacity = useRef(new Animated.Value(0)).current;
+  const detailTrackSwipeX = useRef(new Animated.Value(0)).current;
+  const detailTrackSwipeOpacity = useRef(new Animated.Value(1)).current;
+  const miniPlayerTopYRef = useRef(collapsedPlayerTop);
+  const miniPlayerRef = useRef<View>(null);
+  const detailTouchStartX = useRef(0);
+  const detailTouchStartY = useRef(0);
+  const isDetailTouchDragging = useRef(false);
+  const isDetailTrackSwiping = useRef(false);
+  const [profileForm, setProfileForm] = useState({
+    profileName: '',
+    birthday: '',
+    language: 'en',
   });
-  const [adminAudioFile, setAdminAudioFile] =
-    useState<{ uri: string; name: string; mimeType: string } | null>(null);
-  const [adminCoverFile, setAdminCoverFile] =
-    useState<{ uri: string; name: string; mimeType: string } | null>(null);
-  const [isAdminUploading, setIsAdminUploading] = useState(false);
-  const [adminPendingDeleteId, setAdminPendingDeleteId] = useState<string | null>(null);
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: '',
+    newPassword: '',
+  });
+
+  const miniPlayerPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gestureState) =>
+        gestureState.dy < -12 &&
+        Math.abs(gestureState.dy) > Math.abs(gestureState.dx) * 1.2,
+      onPanResponderGrant: () => {
+        playerSheetOpacity.stopAnimation();
+        playerSheetOpacity.setValue(0.18);
+        measureMiniPlayerTop((topY) => {
+          playerSheetY.setValue(topY);
+        });
+        playerSheetY.setValue(miniPlayerTopYRef.current);
+        setIsTrackDetailOpen(true);
+      },
+      onPanResponderMove: (_, gestureState) => {
+        const nextSheetY = Math.max(0, miniPlayerTopYRef.current + gestureState.dy);
+        playerSheetY.setValue(nextSheetY);
+        setDragOpenOpacity(nextSheetY);
+        miniPlayerDragY.setValue(Math.max(-36, Math.min(0, gestureState.dy / 6)));
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const releasedSheetY = Math.max(0, miniPlayerTopYRef.current + gestureState.dy);
+
+        if (releasedSheetY < miniPlayerTopYRef.current * 0.64 || gestureState.vy < -0.55) {
+          openPlayerSheet(releasedSheetY, false);
+          return;
+        }
+
+        Animated.parallel([
+          Animated.timing(playerSheetY, {
+            toValue: miniPlayerTopYRef.current,
+            duration: 180,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }),
+          Animated.timing(playerSheetOpacity, {
+            toValue: 0,
+            duration: 140,
+            easing: Easing.out(Easing.cubic),
+            useNativeDriver: true,
+          }),
+          Animated.spring(miniPlayerDragY, {
+            toValue: 0,
+            friction: 7,
+            tension: 120,
+            useNativeDriver: true,
+          }),
+        ]).start(() => setIsTrackDetailOpen(false));
+      },
+    }),
+  ).current;
+
   const theme = appThemes[themeMode];
   const styles = useMemo(() => createStyles(theme), [theme]);
   const iconButtonColors = useMemo(
@@ -296,6 +337,23 @@ export default function App() {
     }),
     [theme],
   );
+  const playerBackdropOpacity = playerSheetY.interpolate({
+    inputRange: [0, collapsedPlayerTop],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+  const detailInitialFadeOpacity = playerSheetY.interpolate({
+    inputRange: [0, collapsedPlayerTop * 0.32],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
+  const detailTopSolidOpacity = playerSheetY.interpolate({
+    inputRange: [0, collapsedPlayerTop * 0.32],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+
+  const t = (key: string) => getTranslation(session?.user?.language, key);
 
   const currentTracks = useMemo(() => {
     if (selectedPlaylistId.startsWith('artist:')) {
@@ -304,6 +362,22 @@ export default function App() {
       );
 
       return artist?.tracks.length ? artist.tracks : libraryTracks;
+    }
+
+    if (selectedPlaylistId.startsWith('singer:')) {
+      const singer = singers.find(
+        (candidate) => candidate.id === selectedPlaylistId.slice(7),
+      );
+
+      return singer?.tracks.length ? singer.tracks : libraryTracks;
+    }
+
+    if (selectedPlaylistId.startsWith('lyricist:')) {
+      const lyricist = lyricists.find(
+        (candidate) => candidate.id === selectedPlaylistId.slice(9),
+      );
+
+      return lyricist?.tracks.length ? lyricist.tracks : libraryTracks;
     }
 
     if (selectedPlaylistId.startsWith('album:')) {
@@ -375,6 +449,22 @@ export default function App() {
       return artist ? `Artist: ${artist.name}` : 'Artist';
     }
 
+    if (selectedPlaylistId.startsWith('singer:')) {
+      const singer = singers.find(
+        (candidate) => candidate.id === selectedPlaylistId.slice(7),
+      );
+
+      return singer ? `Singer: ${singer.name}` : 'Singer';
+    }
+
+    if (selectedPlaylistId.startsWith('lyricist:')) {
+      const lyricist = lyricists.find(
+        (candidate) => candidate.id === selectedPlaylistId.slice(9),
+      );
+
+      return lyricist ? `Lyricist: ${lyricist.name}` : 'Lyricist';
+    }
+
     if (selectedPlaylistId.startsWith('album:')) {
       const album = albums.find(
         (candidate) => candidate.id === selectedPlaylistId.slice(6),
@@ -443,7 +533,13 @@ export default function App() {
   );
   const queuePreviewTracks = queueItems.length
     ? queueItems.map((queueItem) => queueItem.track)
-    : visibleTracks.filter((track) => track.id !== selectedTrack.id);
+    : currentTracks.filter((track) => track.id !== selectedTrack.id);
+  const activeTabIndex = bottomTabs.findIndex((tab) => tab.id === activePanel);
+  const bottomTabWidth = (screenWidth - 16) / bottomTabs.length;
+  const tabIndicatorTranslateX = tabSwitchAnim.interpolate({
+    inputRange: bottomTabs.map((_, index) => index),
+    outputRange: bottomTabs.map((_, index) => index * bottomTabWidth),
+  });
   const audioSource = useMemo<AudioSource>(() => {
     return getAudioSourceForTrack(selectedTrack, session);
   }, [selectedTrack, session]);
@@ -481,9 +577,11 @@ export default function App() {
     void Promise.all([
       requestJson<TracksResponse>('/tracks'),
       requestJson<ArtistsResponse>('/tracks/artists').catch(() => null),
+      requestJson<{ singers: Singer[] }>('/people/singers').catch(() => null),
+      requestJson<{ lyricists: Lyricist[] }>('/people/lyricists').catch(() => null),
       requestJson<AlbumsResponse>('/tracks/albums').catch(() => null),
     ])
-      .then(([tracksPayload, artistsPayload, albumsPayload]) => {
+      .then(([tracksPayload, artistsPayload, singersPayload, lyricistsPayload, albumsPayload]) => {
         if (!tracksPayload.tracks.length) {
           return;
         }
@@ -491,10 +589,16 @@ export default function App() {
         const nextTracks = tracksPayload.tracks.map(normalizeTrack);
         setLibraryTracks(nextTracks);
         setArtists(
-          artistsPayload?.artists.length
+            artistsPayload?.artists.length
             ? artistsPayload.artists.map(normalizeArtist)
             : buildArtistsFromTracks(nextTracks),
         );
+        if (singersPayload?.singers) {
+          setSingers(singersPayload.singers);
+        }
+        if (lyricistsPayload?.lyricists) {
+          setLyricists(lyricistsPayload.lyricists);
+        }
         setAlbums(
           albumsPayload?.albums.length
             ? albumsPayload.albums.map(normalizeAlbum)
@@ -541,6 +645,12 @@ export default function App() {
           ...parsedSession,
           user: payload.user,
         });
+        
+        setProfileForm({
+          profileName: payload.user.profileName,
+          birthday: payload.user.birthday || '',
+          language: payload.user.language || 'en',
+        });
       })
       .catch(() => {
         void AsyncStorage.removeItem(sessionStorageKey);
@@ -572,15 +682,15 @@ export default function App() {
   }, [playlists]);
 
   useEffect(() => {
-    if (!visibleTracks.length) {
+    if (!currentTracks.length) {
       return;
     }
 
-    if (!visibleTracks.some((track) => track.id === selectedTrackId)) {
-      setSelectedTrackId(visibleTracks[0].id);
+    if (!currentTracks.some((track) => track.id === selectedTrackId)) {
+      setSelectedTrackId(currentTracks[0].id);
       setIsPlaying(false);
     }
-  }, [selectedTrackId, visibleTracks]);
+  }, [currentTracks, selectedTrackId]);
 
   useEffect(() => {
     if (googleResponse?.type !== 'success') {
@@ -597,6 +707,22 @@ export default function App() {
 
     void handleGoogleToken(idToken);
   }, [googleResponse]);
+
+  useEffect(() => {
+    contentSwitchAnim.setValue(0);
+    Animated.timing(tabSwitchAnim, {
+      toValue: Math.max(activeTabIndex, 0),
+      duration: 260,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+    Animated.timing(contentSwitchAnim, {
+      toValue: 1,
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [activeTabIndex, contentSwitchAnim, tabSwitchAnim]);
 
   useEffect(() => {
     void setAudioModeAsync({
@@ -617,7 +743,7 @@ export default function App() {
       return undefined;
     }
 
-    const tracksNeedingRuntime = visibleTracks
+    const tracksNeedingRuntime = currentTracks
       .filter(
         (track) =>
           !durationByTrackId[track.id] &&
@@ -683,7 +809,7 @@ export default function App() {
       isCancelled = true;
       cleanupTasks.forEach((cleanup) => cleanup());
     };
-  }, [durationByTrackId, session, visibleTracks]);
+  }, [currentTracks, durationByTrackId, session]);
 
   useEffect(() => {
     completedTrackRef.current = '';
@@ -884,16 +1010,300 @@ export default function App() {
   }
 
   function openTrackDetail(trackId: string) {
-    if (trackId !== selectedTrackId) {
-      selectTrack(trackId);
+    selectTrack(trackId);
+    // setIsTrackDetailOpen(true);
+  }
+
+  function getFallbackMiniPlayerTop() {
+    return collapsedPlayerTop;
+  }
+
+  function measureMiniPlayerTop(callback?: (topY: number) => void) {
+    const fallbackTopY = miniPlayerTopYRef.current || getFallbackMiniPlayerTop();
+    const miniPlayerNode = miniPlayerRef.current;
+
+    if (!miniPlayerNode?.measureInWindow) {
+      callback?.(fallbackTopY);
+      return fallbackTopY;
     }
 
-    // setIsTrackDetailOpen(true);
+    miniPlayerNode.measureInWindow((_x, y, _width, height) => {
+      const measuredTopY =
+        Number.isFinite(y) && y > 0
+          ? y
+          : screenHeight - Math.max(height || 0, isSmallScreen ? 64 : 72) - (isSmallScreen ? 70 : 74);
+
+      miniPlayerTopYRef.current = measuredTopY;
+
+      if (!isTrackDetailOpen) {
+        playerSheetY.setValue(measuredTopY);
+      }
+
+      callback?.(measuredTopY);
+    });
+
+    return fallbackTopY;
+  }
+
+  function setDragOpenOpacity(sheetY: number) {
+    const progress = 1 - sheetY / Math.max(miniPlayerTopYRef.current, 1);
+    playerSheetOpacity.setValue(Math.max(0.18, Math.min(1, progress * 1.35)));
+  }
+
+  function openPlayerSheetFromMiniPlayer() {
+    measureMiniPlayerTop((topY) => {
+      openPlayerSheet(topY);
+    });
+  }
+
+  function openPlayerSheet(startY = miniPlayerTopYRef.current, fadeIn = true) {
+    playerSheetY.stopAnimation();
+    playerSheetOpacity.stopAnimation();
+    playerSheetY.setValue(startY);
+    playerSheetOpacity.setValue(fadeIn ? 0 : 1);
+    setIsTrackDetailOpen(true);
+
+    requestAnimationFrame(() => {
+      Animated.parallel([
+        Animated.timing(playerSheetY, {
+          toValue: 0,
+          duration: fadeIn ? 260 : 210,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(playerSheetOpacity, {
+          toValue: 1,
+          duration: fadeIn ? 180 : 90,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.spring(miniPlayerDragY, {
+          toValue: 0,
+          friction: 7,
+          tension: 120,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    });
   }
 
   function closeTrackDetail() {
     setIsPlaylistPickerOpen(false);
-    setIsTrackDetailOpen(false);
+    playerSheetY.stopAnimation();
+    playerSheetOpacity.stopAnimation();
+    Animated.parallel([
+      Animated.timing(playerSheetY, {
+        toValue: miniPlayerTopYRef.current,
+        duration: 210,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(playerSheetOpacity, {
+        toValue: 0,
+        duration: 160,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      playerSheetY.setValue(miniPlayerTopYRef.current);
+      playerSheetOpacity.setValue(0);
+      setIsTrackDetailOpen(false);
+    });
+  }
+
+  function handleMiniPlayerLayout(event: LayoutChangeEvent) {
+    miniPlayerTopYRef.current = event.nativeEvent.layout.y;
+
+    if (!isTrackDetailOpen) {
+      playerSheetY.setValue(miniPlayerTopYRef.current);
+    }
+  }
+
+  function getPrimaryTouch(event: GestureResponderEvent) {
+    return event.nativeEvent.touches[0] ?? event.nativeEvent.changedTouches[0] ?? null;
+  }
+
+  function settleTrackDetailSheet() {
+    Animated.parallel([
+      Animated.spring(playerSheetY, {
+        toValue: 0,
+        friction: 7,
+        tension: 120,
+        useNativeDriver: true,
+      }),
+      Animated.timing(playerSheetOpacity, {
+        toValue: 1,
+        duration: 120,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }
+
+  function handleDetailTouchStart(event: GestureResponderEvent) {
+    const touch = getPrimaryTouch(event);
+
+    if (!touch) {
+      return;
+    }
+
+    detailTouchStartX.current = touch.pageX;
+    detailTouchStartY.current = touch.pageY;
+    isDetailTouchDragging.current = false;
+    isDetailTrackSwiping.current = false;
+  }
+
+  function handleDetailTouchMove(event: GestureResponderEvent) {
+    const touch = getPrimaryTouch(event);
+
+    if (!touch) {
+      return;
+    }
+
+    const dx = touch.pageX - detailTouchStartX.current;
+    const dy = touch.pageY - detailTouchStartY.current;
+
+    if (dy <= 6 || Math.abs(dy) <= Math.abs(dx)) {
+      if (
+        currentTracks.length > 1 &&
+        Math.abs(dx) > 10 &&
+        Math.abs(dx) > Math.abs(dy) * 1.25
+      ) {
+        isDetailTrackSwiping.current = true;
+        detailTrackSwipeX.setValue(Math.max(-42, Math.min(42, dx * 0.18)));
+      }
+
+      return;
+    }
+
+    isDetailTouchDragging.current = true;
+    playerSheetY.setValue(Math.max(0, dy));
+  }
+
+  function handleDetailTouchEnd(event: GestureResponderEvent) {
+    const touch = event.nativeEvent.changedTouches[0];
+    const dx = touch ? touch.pageX - detailTouchStartX.current : 0;
+    const dy = touch ? touch.pageY - detailTouchStartY.current : 0;
+
+    if (isDetailTrackSwiping.current) {
+      isDetailTrackSwiping.current = false;
+
+      if (
+        currentTracks.length > 1 &&
+        Math.abs(dx) > screenWidth * 0.16 &&
+        Math.abs(dx) > Math.abs(dy) * 1.35
+      ) {
+        swipeDetailTrack(dx < 0 ? 'next' : 'previous');
+        return;
+      }
+
+      resetDetailTrackSwipe();
+      return;
+    }
+
+    if (!isDetailTouchDragging.current) {
+      return;
+    }
+
+    isDetailTouchDragging.current = false;
+
+    if (dy > screenHeight * 0.08) {
+      closeTrackDetail();
+      return;
+    }
+
+    settleTrackDetailSheet();
+  }
+
+  function handleDetailTouchCancel() {
+    if (isDetailTrackSwiping.current) {
+      isDetailTrackSwiping.current = false;
+      resetDetailTrackSwipe();
+      return;
+    }
+
+    if (!isDetailTouchDragging.current) {
+      return;
+    }
+
+    isDetailTouchDragging.current = false;
+    settleTrackDetailSheet();
+  }
+
+  function resetDetailTrackSwipe() {
+    Animated.parallel([
+      Animated.spring(detailTrackSwipeX, {
+        toValue: 0,
+        friction: 8,
+        tension: 130,
+        useNativeDriver: true,
+      }),
+      Animated.timing(detailTrackSwipeOpacity, {
+        toValue: 1,
+        duration: 120,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }
+
+  function swipeDetailTrack(direction: 'next' | 'previous') {
+    const playbackTracks = currentTracks;
+
+    if (playbackTracks.length <= 1) {
+      resetDetailTrackSwipe();
+      return;
+    }
+
+    const currentIndex = playbackTracks.findIndex(
+      (track) => track.id === selectedTrackId,
+    );
+    const fallbackIndex = currentIndex >= 0 ? currentIndex : 0;
+    const nextIndex =
+      direction === 'next'
+        ? fallbackIndex + 1
+        : fallbackIndex - 1;
+
+    if (nextIndex < 0 || nextIndex >= playbackTracks.length) {
+      resetDetailTrackSwipe();
+      return;
+    }
+
+    const exitX = direction === 'next' ? -screenWidth * 0.34 : screenWidth * 0.34;
+    const enterX = direction === 'next' ? screenWidth * 0.22 : -screenWidth * 0.22;
+
+    Animated.parallel([
+      Animated.timing(detailTrackSwipeX, {
+        toValue: exitX,
+        duration: 110,
+        easing: Easing.in(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(detailTrackSwipeOpacity, {
+        toValue: 0.45,
+        duration: 100,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      selectTrack(playbackTracks[nextIndex].id, true);
+      detailTrackSwipeX.setValue(enterX);
+      detailTrackSwipeOpacity.setValue(0.45);
+      Animated.parallel([
+        Animated.spring(detailTrackSwipeX, {
+          toValue: 0,
+          friction: 8,
+          tension: 135,
+          useNativeDriver: true,
+        }),
+        Animated.timing(detailTrackSwipeOpacity, {
+          toValue: 1,
+          duration: 140,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]).start();
+    });
   }
 
   function openPlaylistPicker() {
@@ -902,6 +1312,12 @@ export default function App() {
     }
 
     setIsPlaylistPickerOpen((current) => !current);
+  }
+
+  function openCurrentTrackPlaylistSheet() {
+    setActionTrackId(selectedTrackId);
+    setActionSheetMode('playlists');
+    setIsTrackActionSheetOpen(true);
   }
 
   function selectPlaylist(playlistId: string) {
@@ -930,6 +1346,24 @@ export default function App() {
     setIsPlaying(false);
   }
 
+  function selectSinger(singerId: string) {
+    setSelectedPlaylistId(`singer:${singerId}`);
+    setSearchQuery('');
+    setActivePanel('flow');
+    setProgress(0);
+    setSoundPosition(0);
+    setIsPlaying(false);
+  }
+
+  function selectLyricist(lyricistId: string) {
+    setSelectedPlaylistId(`lyricist:${lyricistId}`);
+    setSearchQuery('');
+    setActivePanel('flow');
+    setProgress(0);
+    setSoundPosition(0);
+    setIsPlaying(false);
+  }
+
   function selectNextTrack() {
     const queuedItem = queueItems[0];
 
@@ -951,7 +1385,7 @@ export default function App() {
       return;
     }
 
-    const playbackTracks = visibleTracks.length ? visibleTracks : currentTracks;
+    const playbackTracks = currentTracks;
 
     if (!playbackTracks.length) {
       return;
@@ -982,7 +1416,7 @@ export default function App() {
   }
 
   function selectPreviousTrack() {
-    const playbackTracks = visibleTracks.length ? visibleTracks : currentTracks;
+    const playbackTracks = currentTracks;
 
     if (!playbackTracks.length) {
       return;
@@ -1049,6 +1483,26 @@ export default function App() {
     } catch (error) {
       handleApiError(error);
     }
+  }
+
+  function handleLikePress(trackId: string) {
+    setLikedPulseTrackId(trackId);
+    likeScaleAnim.setValue(1);
+    Animated.sequence([
+      Animated.timing(likeScaleAnim, {
+        toValue: 1.32,
+        duration: 110,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+      Animated.spring(likeScaleAnim, {
+        toValue: 1,
+        friction: 4,
+        tension: 180,
+        useNativeDriver: true,
+      }),
+    ]).start(() => setLikedPulseTrackId(''));
+    void toggleLikeTrack(trackId);
   }
 
   async function createPlaylist() {
@@ -1206,7 +1660,7 @@ export default function App() {
     closeTrackDetail();
   }
 
-  async function createPlaylistAndAddCurrentTrack() {
+  async function createPlaylistAndAddCurrentTrack(trackId = selectedTrackId) {
     const name = newPlaylistName.trim();
 
     if (!session || !name) {
@@ -1231,7 +1685,7 @@ export default function App() {
       setNewPlaylistName('');
 
       const addPayload = await requestAuthorizedJson<PlaylistResponse>(
-        `/playlists/${createdPlaylist.id}/tracks/${selectedTrackId}`,
+        `/playlists/${createdPlaylist.id}/tracks/${trackId}`,
         {
           method: 'POST',
         },
@@ -1244,6 +1698,7 @@ export default function App() {
         ),
       );
       setIsPlaylistPickerOpen(false);
+      closeTrackActionSheet();
     } catch (error) {
       handleApiError(error);
     }
@@ -1432,27 +1887,6 @@ export default function App() {
     }
   }
 
-  async function handleDeleteAccount() {
-    if (!session) {
-      return;
-    }
-
-    setIsSubmitting(true);
-
-    try {
-      await requestAuthorizedJson('/auth/account', {
-        method: 'DELETE',
-      });
-
-      await handleLogout();
-    } catch (error) {
-      handleApiError(error);
-    } finally {
-      setIsSubmitting(false);
-      setIsDeleteAccountConfirming(false);
-    }
-  }
-
   async function refreshLibraryTracks() {
     try {
       const [tracksPayload, artistsPayload, albumsPayload] = await Promise.all([
@@ -1477,123 +1911,142 @@ export default function App() {
     }
   }
 
-  async function pickAdminAudio() {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: 'audio/*',
-      copyToCacheDirectory: true,
-      multiple: false,
-    });
-    if (result.canceled || !result.assets?.[0]) return;
-    const asset = result.assets[0];
-    setAdminAudioFile({
-      uri: asset.uri,
-      name: asset.name ?? `audio-${Date.now()}.mp3`,
-      mimeType: asset.mimeType ?? 'audio/mpeg',
-    });
-  }
-
-  async function pickAdminCover() {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: 'image/*',
-      copyToCacheDirectory: true,
-      multiple: false,
-    });
-    if (result.canceled || !result.assets?.[0]) return;
-    const asset = result.assets[0];
-    setAdminCoverFile({
-      uri: asset.uri,
-      name: asset.name ?? `cover-${Date.now()}.jpg`,
-      mimeType: asset.mimeType ?? 'image/jpeg',
-    });
-  }
-
-  function clearAdminUploadForm() {
-    setAdminUploadForm({
-      title: '',
-      artist: '',
-      album: '',
-      genre: '',
-      mood: '',
-    });
-    setAdminAudioFile(null);
-    setAdminCoverFile(null);
-  }
-
-  async function handleAdminUpload() {
+  async function handleUpdateProfile() {
     if (!session) return;
-    if (!adminAudioFile) {
-      setErrorMessage('Choose an audio file to upload.');
-      return;
-    }
-    if (!adminUploadForm.title.trim()) {
-      setErrorMessage('Give the track a title.');
-      return;
-    }
+    setIsSubmitting(true);
     clearFeedback();
-    setIsAdminUploading(true);
-
-    const payload = new FormData();
-    payload.append('audio', {
-      uri: adminAudioFile.uri,
-      name: adminAudioFile.name,
-      type: adminAudioFile.mimeType,
-    } as unknown as Blob);
-    if (adminCoverFile) {
-      payload.append('cover', {
-        uri: adminCoverFile.uri,
-        name: adminCoverFile.name,
-        type: adminCoverFile.mimeType,
-      } as unknown as Blob);
-    }
-    payload.append('title', adminUploadForm.title.trim());
-    if (adminUploadForm.artist.trim()) payload.append('artist', adminUploadForm.artist.trim());
-    if (adminUploadForm.album.trim()) payload.append('album', adminUploadForm.album.trim());
-    if (adminUploadForm.genre.trim()) payload.append('genre', adminUploadForm.genre.trim());
-    if (adminUploadForm.mood.trim()) payload.append('mood', adminUploadForm.mood.trim());
-
     try {
-      const response = await fetch(`${apiBaseUrl}/tracks/admin/upload`, {
+      const response = await fetch(`${apiBaseUrl}/auth/profile`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.accessToken}`,
+        },
+        body: JSON.stringify(profileForm),
+      });
+
+      if (!response.ok) {
+        throw new Error('Could not update profile');
+      }
+
+      const data = await response.json();
+      setSession({
+        ...session,
+        user: data.user,
+      });
+      setNoticeMessage('Profile updated successfully! ✨');
+      setTimeout(() => {
+        setIsSettingsOpen(false);
+        setNoticeMessage('');
+      }, 1500);
+    } catch (error) {
+      handleApiError(error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleChangePassword() {
+    if (!session) return;
+    setIsSubmitting(true);
+    clearFeedback();
+    try {
+      const response = await fetch(`${apiBaseUrl}/auth/change-password`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.accessToken}`,
+        },
+        body: JSON.stringify(passwordForm),
+      });
+
+      if (!response.ok) {
+        throw new Error('Could not change password');
+      }
+
+      setNoticeMessage('Password changed successfully.');
+      setPasswordForm({ currentPassword: '', newPassword: '' });
+    } catch (error) {
+      handleApiError(error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleDeleteAccount() {
+    if (!session) return;
+    if (!isDeleteAccountConfirming) {
+      setIsDeleteAccountConfirming(true);
+      return;
+    }
+    setIsSubmitting(true);
+    clearFeedback();
+    try {
+      const response = await fetch(`${apiBaseUrl}/auth/account`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${session.accessToken}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Could not delete account');
+      }
+
+      await AsyncStorage.removeItem(sessionStorageKey);
+      setSession(null);
+      setView('login');
+      setIsSettingsOpen(false);
+    } catch (error) {
+      handleApiError(error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleUploadAvatar() {
+    if (!session) return;
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'image/*',
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (result.canceled || !result.assets?.[0]) return;
+      const asset = result.assets[0];
+      
+      const formData = new FormData();
+      formData.append('avatar', {
+        uri: asset.uri,
+        name: asset.name ?? `avatar-${Date.now()}.jpg`,
+        type: asset.mimeType ?? 'image/jpeg',
+      } as any);
+
+      setIsSubmitting(true);
+      clearFeedback();
+
+      const response = await fetch(`${apiBaseUrl}/auth/profile/avatar`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${session.accessToken}`,
         },
-        body: payload,
+        body: formData,
       });
-      const body = (await response.json().catch(() => null)) as
-        | { message?: string | string[] }
-        | null;
-      if (!response.ok) {
-        const message = Array.isArray(body?.message)
-          ? body?.message.join(', ')
-          : body?.message;
-        throw new Error(message ?? 'Upload failed.');
-      }
-      setNoticeMessage(`"${adminUploadForm.title.trim()}" uploaded.`);
-      clearAdminUploadForm();
-      await refreshLibraryTracks();
-    } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : 'Upload failed. Try again.',
-      );
-    } finally {
-      setIsAdminUploading(false);
-    }
-  }
 
-  async function handleAdminDeleteTrack(trackId: string) {
-    if (!session) return;
-    setAdminPendingDeleteId(trackId);
-    setErrorMessage('');
-    try {
-      await requestAuthorizedJson(`/tracks/admin/${trackId}`, {
-        method: 'DELETE',
+      if (!response.ok) {
+        throw new Error('Avatar upload failed');
+      }
+
+      const data = await response.json();
+      setSession({
+        ...session,
+        user: data.user,
       });
-      setLibraryTracks((current) => current.filter((track) => track.id !== trackId));
-      await refreshLibraryTracks();
+      setNoticeMessage('Avatar updated successfully!');
     } catch (error) {
       handleApiError(error);
     } finally {
-      setAdminPendingDeleteId(null);
+      setIsSubmitting(false);
     }
   }
 
@@ -1636,7 +2089,6 @@ export default function App() {
     setResetForm({
       newPassword: '',
     });
-    setIsAdminViewOpen(false);
     clearFeedback();
   }
 
@@ -1675,165 +2127,191 @@ export default function App() {
     );
   }
 
-  if (session && isAdminViewOpen && session.user.role === 'admin') {
+  if (session && isSettingsOpen) {
     return (
       <SafeAreaView style={styles.safeArea}>
         <StatusBar style={themeMode === 'dark' ? 'light' : 'dark'} />
+        <View style={styles.settingsHeader}>
+          <Pressable
+            onPress={() => {
+              setIsSettingsOpen(false);
+              clearFeedback();
+            }}
+            style={styles.settingsBackButton}
+          >
+            <Ionicons color={theme.text} name="chevron-back" size={24} />
+          </Pressable>
+          <Text style={styles.settingsTitle}>{t('settings')}</Text>
+          <View style={{ width: 40 }} />
+        </View>
+
         <ScrollView
-          contentContainerStyle={styles.adminContent}
+          contentContainerStyle={styles.settingsContent}
           showsVerticalScrollIndicator={false}
         >
-          <View style={styles.adminHeader}>
-            <Pressable
-              onPress={() => {
-                setIsAdminViewOpen(false);
-                clearFeedback();
-              }}
-              style={styles.adminBackButton}
-            >
-              <Ionicons color={theme.text} name="chevron-back" size={20} />
-              <Text style={styles.adminBackText}>Back</Text>
-            </Pressable>
-            <Text style={styles.adminTitle}>Admin panel</Text>
-            <View style={{ width: 60 }} />
-          </View>
-
           {errorMessage ? (
-            <View style={[styles.feedback, styles.feedbackError]}>
+            <View style={[styles.feedback, styles.feedbackError, { marginHorizontal: 16, marginBottom: 16 }]}>
               <Text style={styles.feedbackText}>{errorMessage}</Text>
             </View>
           ) : null}
           {noticeMessage ? (
-            <View style={[styles.feedback, styles.feedbackNotice]}>
+            <View style={[styles.feedback, styles.feedbackNotice, { marginHorizontal: 16, marginBottom: 16 }]}>
               <Text style={styles.feedbackText}>{noticeMessage}</Text>
             </View>
           ) : null}
 
-          <View style={styles.adminCard}>
-            <Text style={styles.adminCardTitle}>Upload a track</Text>
-            <Text style={styles.caption}>
-              Audio file is required. Cover image and metadata are optional.
-            </Text>
+          {/* Modern Profile Header Card */}
+          <Pressable 
+            onPress={() => void handleUploadAvatar()}
+            style={({ pressed }) => [styles.modernSettingsProfileCard, pressed && { opacity: 0.8 }]}
+          >
+            <View style={styles.modernAvatarContainer}>
+              {session.user.avatarUrl ? (
+                <Image
+                  source={{ uri: session.user.avatarUrl }}
+                  style={styles.modernAvatar}
+                />
+              ) : (
+                <View style={[styles.modernAvatar, styles.spotifyAvatarPlaceholder]}>
+                  <Text style={styles.modernAvatarInitial}>
+                    {session.user.profileName.charAt(0).toUpperCase()}
+                  </Text>
+                </View>
+              )}
+              <View style={styles.cameraBadge}>
+                <Ionicons name="camera" size={12} color="#fff" />
+              </View>
+            </View>
+            
+            <View style={styles.modernProfileMeta}>
+              <Text style={styles.modernProfileName} numberOfLines={1}>{session.user.profileName}</Text>
+              <Text style={styles.modernProfileSubtitle} numberOfLines={1}>{session.user.email}</Text>
+            </View>
+            
+            <Ionicons name="chevron-forward" size={20} color={theme.muted} style={{ marginLeft: 'auto' }} />
+          </Pressable>
 
+          <View style={styles.spotifySettingsSection}>
+            <Text style={styles.spotifySettingsSectionTitle}>{t('general')}</Text>
+            
+            <Text style={styles.fieldLabel}>{t('displayName')}</Text>
             <TextInput
-              onChangeText={(title) =>
-                setAdminUploadForm((current) => ({ ...current, title }))
-              }
-              placeholder="Title (required)"
-              placeholderTextColor={theme.muted}
-              style={styles.input}
-              value={adminUploadForm.title}
-            />
-            <TextInput
-              onChangeText={(artist) =>
-                setAdminUploadForm((current) => ({ ...current, artist }))
-              }
-              placeholder="Artist"
-              placeholderTextColor={theme.muted}
-              style={styles.input}
-              value={adminUploadForm.artist}
-            />
-            <TextInput
-              onChangeText={(album) =>
-                setAdminUploadForm((current) => ({ ...current, album }))
-              }
-              placeholder="Album"
-              placeholderTextColor={theme.muted}
-              style={styles.input}
-              value={adminUploadForm.album}
-            />
-            <TextInput
-              onChangeText={(genre) =>
-                setAdminUploadForm((current) => ({ ...current, genre }))
-              }
-              placeholder="Genre"
-              placeholderTextColor={theme.muted}
-              style={styles.input}
-              value={adminUploadForm.genre}
-            />
-            <TextInput
-              onChangeText={(mood) =>
-                setAdminUploadForm((current) => ({ ...current, mood }))
-              }
-              placeholder="Mood"
-              placeholderTextColor={theme.muted}
-              style={styles.input}
-              value={adminUploadForm.mood}
+              onChangeText={(text) => setProfileForm({ ...profileForm, profileName: text })}
+              style={styles.spotifyInput}
+              value={profileForm.profileName}
             />
 
-            <Pressable
-              onPress={() => {
-                void pickAdminAudio();
-              }}
-              style={styles.filePickerButton}
+            <Text style={styles.fieldLabel}>{t('birthday')}</Text>
+            <TextInput
+              onChangeText={(text) => setProfileForm({ ...profileForm, birthday: text })}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor={theme.muted}
+              style={styles.spotifyInput}
+              value={profileForm.birthday}
+            />
+
+            <Text style={styles.fieldLabel}>{t('language')}</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.languageScroller}
             >
-              <Ionicons color={theme.text} name="musical-notes" size={18} />
-              <Text style={styles.filePickerText} numberOfLines={1}>
-                {adminAudioFile ? adminAudioFile.name : 'Choose audio file'}
-              </Text>
-            </Pressable>
-            <Pressable
-              onPress={() => {
-                void pickAdminCover();
-              }}
-              style={styles.filePickerButton}
-            >
-              <Ionicons color={theme.text} name="image" size={18} />
-              <Text style={styles.filePickerText} numberOfLines={1}>
-                {adminCoverFile ? adminCoverFile.name : 'Choose cover (optional)'}
-              </Text>
-            </Pressable>
+              {languageOptions.map((lang) => (
+                <Pressable
+                  key={lang.code}
+                  onPress={() => setProfileForm({ ...profileForm, language: lang.code })}
+                  style={[
+                    styles.languageChip,
+                    profileForm.language === lang.code
+                      ? styles.languageChipActive
+                      : null,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.languageChipText,
+                      profileForm.language === lang.code
+                        ? styles.languageChipTextActive
+                        : null,
+                    ]}
+                  >
+                    {lang.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
 
             <Pressable
-              disabled={isAdminUploading}
+              disabled={isSubmitting}
               onPress={() => {
-                void handleAdminUpload();
+                void handleUpdateProfile();
               }}
-              style={styles.primaryButton}
+              style={styles.settingsPrimaryAction}
             >
-              <Text style={styles.primaryButtonLabel}>
-                {isAdminUploading ? 'Uploading…' : 'Upload track'}
+              <Text style={styles.settingsPrimaryActionText}>
+                {isSubmitting ? 'Saving…' : t('saveProfile')}
               </Text>
             </Pressable>
           </View>
 
-          <View style={styles.adminCard}>
-            <Text style={styles.adminCardTitle}>
-              Library ({libraryTracks.length} track
-              {libraryTracks.length === 1 ? '' : 's'})
-            </Text>
-            <Text style={styles.caption}>
-              Remove a track to take it out of the shared library.
-            </Text>
+          <View style={styles.spotifySettingsSection}>
+            <Text style={styles.spotifySettingsSectionTitle}>{t('security')}</Text>
+            
+            <Text style={styles.fieldLabel}>Current Password</Text>
+            <TextInput
+              onChangeText={(text) => setPasswordForm({ ...passwordForm, currentPassword: text })}
+              placeholderTextColor={theme.muted}
+              secureTextEntry
+              style={styles.spotifyInput}
+              value={passwordForm.currentPassword}
+            />
+            
+            <Text style={styles.fieldLabel}>New Password</Text>
+            <TextInput
+              onChangeText={(text) => setPasswordForm({ ...passwordForm, newPassword: text })}
+              placeholderTextColor={theme.muted}
+              secureTextEntry
+              style={styles.spotifyInput}
+              value={passwordForm.newPassword}
+            />
 
-            {libraryTracks.length === 0 ? (
-              <Text style={styles.caption}>No tracks yet. Upload one above.</Text>
-            ) : (
-              <View style={styles.adminGrid}>
-                {libraryTracks.map((track) => (
-                  <View key={track.id} style={styles.adminGridCard}>
-                    <TrackArt track={track} size="medium" />
-                    <Text style={styles.adminGridTitle} numberOfLines={1}>
-                      {track.title}
-                    </Text>
-                    <Text style={styles.adminGridSub} numberOfLines={1}>
-                      {track.artist}
-                    </Text>
-                    <Pressable
-                      disabled={adminPendingDeleteId === track.id}
-                      onPress={() => {
-                        void handleAdminDeleteTrack(track.id);
-                      }}
-                      style={styles.adminGridRemove}
-                    >
-                      <Text style={styles.adminGridRemoveText}>
-                        {adminPendingDeleteId === track.id ? 'Removing…' : 'Remove'}
-                      </Text>
-                    </Pressable>
-                  </View>
-                ))}
-              </View>
-            )}
+            <Pressable
+              disabled={isSubmitting || !passwordForm.currentPassword || !passwordForm.newPassword}
+              onPress={() => {
+                void handleChangePassword();
+              }}
+              style={[
+                styles.settingsSecondaryAction,
+                (isSubmitting ||
+                  !passwordForm.currentPassword ||
+                  !passwordForm.newPassword) &&
+                  styles.disabledButton,
+              ]}
+            >
+              <Text style={styles.settingsSecondaryActionText}>
+                {isSubmitting ? 'Saving…' : t('changePassword')}
+              </Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.accountRemovalSection}>
+            <View style={styles.accountRemovalCopy}>
+              <Text style={styles.accountRemovalTitle}>{t('deleteAccount')}</Text>
+              <Text style={styles.accountRemovalDescription}>
+                Permanently remove your account and saved listening data.
+              </Text>
+            </View>
+            <Pressable
+              disabled={isSubmitting}
+              onPress={() => {
+                void handleDeleteAccount();
+              }}
+              style={styles.deleteAccountAction}
+            >
+              <Text style={styles.deleteAccountActionText}>
+                {isSubmitting ? 'Deleting…' : isDeleteAccountConfirming ? 'Are you sure?' : t('deleteAccount')}
+              </Text>
+            </Pressable>
           </View>
         </ScrollView>
       </SafeAreaView>
@@ -1845,166 +2323,215 @@ export default function App() {
       <SafeAreaView style={styles.safeArea}>
         <StatusBar style={themeMode === 'dark' ? 'light' : 'dark'} />
         <View style={styles.playerScreen}>
+          <View style={styles.appHeader}>
+            <View style={styles.brandRow}>
+              <LinearGradient
+                colors={[theme.accent, theme.secondary]}
+                end={{ x: 1, y: 1 }}
+                start={{ x: 0, y: 0 }}
+                style={styles.brandMark}
+              >
+                <Text style={styles.brandMarkText}>S</Text>
+              </LinearGradient>
+              <Text style={styles.brandName}>Sonik</Text>
+            </View>
+            <View style={styles.headerActions}>
+              <Pressable
+                accessibilityLabel={`Switch to ${
+                  themeMode === 'dark' ? 'light' : 'dark'
+                } mode`}
+                style={styles.themeButton}
+                onPress={toggleThemeMode}
+              >
+                <Ionicons
+                  color={theme.text}
+                  name={themeMode === 'dark' ? 'sunny' : 'moon'}
+                  size={18}
+                />
+              </Pressable>
+              <Pressable style={styles.logoutButton} onPress={handleLogout}>
+                <Ionicons color={theme.text} name="log-out-outline" size={20} />
+              </Pressable>
+            </View>
+          </View>
           <ScrollView
             contentContainerStyle={styles.playerContent}
             showsVerticalScrollIndicator={false}
           >
-            <View style={styles.appHeader}>
-              <View style={styles.brandRow}>
-                <LinearGradient
-                  colors={[theme.accent, theme.secondary]}
-                  end={{ x: 1, y: 1 }}
-                  start={{ x: 0, y: 0 }}
-                  style={styles.brandMark}
-                >
-                  <Text style={styles.brandMarkText}>S</Text>
-                </LinearGradient>
-                <Text style={styles.brandName}>Sonik</Text>
-              </View>
-              <View style={styles.headerActions}>
-                <Pressable
-                  accessibilityLabel={`Switch to ${
-                    themeMode === 'dark' ? 'light' : 'dark'
-                  } mode`}
-                  style={styles.themeButton}
-                  onPress={toggleThemeMode}
-                >
-                  <Ionicons
-                    color={theme.text}
-                    name={themeMode === 'dark' ? 'sunny' : 'moon'}
-                    size={18}
-                  />
-                </Pressable>
-                <Pressable style={styles.logoutButton} onPress={handleLogout}>
-                  <Ionicons color={theme.text} name="log-out-outline" size={20} />
-                </Pressable>
-              </View>
-            </View>
-
-            <View style={styles.searchPill}>
-              <Ionicons color={theme.muted} name="search" size={18} />
-              <TextInput
-                autoCapitalize="none"
-                onChangeText={setSearchQuery}
-                placeholder="Search songs, artists, albums"
-                placeholderTextColor={theme.muted}
-                style={styles.searchInput}
-                value={searchQuery}
-              />
-            </View>
-
-            <View style={styles.panelTabs}>
-              {[
-                ['flow', 'Flow'],
-                ['library', 'Library'],
-                ['profile', 'Profile'],
-              ].map(([value, label]) => (
-                <Pressable
-                  key={value}
-                  onPress={() => setActivePanel(value as ActivePanel)}
-                  style={[
-                    styles.panelTab,
-                    activePanel === value ? styles.panelTabActive : null,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.panelTabLabel,
-                      activePanel === value ? styles.panelTabLabelActive : null,
-                    ]}
-                  >
-                    {label}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.sourceScroller}
+            <Animated.View
+              style={[
+                styles.tabContentAnimator,
+                {
+                  opacity: contentSwitchAnim,
+                  transform: [
+                    {
+                      translateY: contentSwitchAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [12, 0],
+                      }),
+                    },
+                  ],
+                },
+              ]}
             >
-              {sourceFilters.map(({ id, label, count }) => (
-                <Pressable
-                  key={id}
-                  onPress={() => selectPlaylist(id)}
-                  style={[
-                    styles.sourceChip,
-                    selectedPlaylistId === id ? styles.sourceChipActive : null,
-                  ]}
-                >
-                  <Text
+            {activePanel === 'flow' || activePanel === 'library' ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.sourceScroller}
+              >
+                {sourceFilters.map(({ id, label, count }) => (
+                  <Pressable
+                    key={id}
+                    onPress={() => selectPlaylist(id)}
                     style={[
-                      styles.sourceChipLabel,
-                      selectedPlaylistId === id
-                        ? styles.sourceChipLabelActive
-                        : null,
+                      styles.sourceChip,
+                      selectedPlaylistId === id ? styles.sourceChipActive : null,
                     ]}
                   >
-                    {label}
-                  </Text>
-                  <Text
+                    <Text
+                      style={[
+                        styles.sourceChipLabel,
+                        selectedPlaylistId === id
+                          ? styles.sourceChipLabelActive
+                          : null,
+                      ]}
+                    >
+                      {label}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.sourceChipCount,
+                        selectedPlaylistId === id
+                          ? styles.sourceChipCountActive
+                          : null,
+                      ]}
+                    >
+                      {count}
+                    </Text>
+                  </Pressable>
+                ))}
+                {selectedPlaylistId.startsWith('artist:') ||
+                selectedPlaylistId.startsWith('album:') ? (
+                  <Pressable style={[styles.sourceChip, styles.sourceChipActive]}>
+                    <Text
+                      style={[styles.sourceChipLabel, styles.sourceChipLabelActive]}
+                      numberOfLines={1}
+                    >
+                      {selectedSourceLabel}
+                    </Text>
+                    <Text
+                      style={[styles.sourceChipCount, styles.sourceChipCountActive]}
+                    >
+                      {currentTracks.length}
+                    </Text>
+                  </Pressable>
+                ) : null}
+                {playlists.map((playlist, index) => (
+                  <Pressable
+                    key={`source-playlist-${playlist.id}-${index}`}
+                    onPress={() => selectPlaylist(playlist.id)}
                     style={[
-                      styles.sourceChipCount,
-                      selectedPlaylistId === id
-                        ? styles.sourceChipCountActive
-                        : null,
-                    ]}
-                  >
-                    {count}
-                  </Text>
-                </Pressable>
-              ))}
-              {selectedPlaylistId.startsWith('artist:') ||
-              selectedPlaylistId.startsWith('album:') ? (
-                <Pressable style={[styles.sourceChip, styles.sourceChipActive]}>
-                  <Text
-                    style={[styles.sourceChipLabel, styles.sourceChipLabelActive]}
-                    numberOfLines={1}
-                  >
-                    {selectedSourceLabel}
-                  </Text>
-                  <Text
-                    style={[styles.sourceChipCount, styles.sourceChipCountActive]}
-                  >
-                    {currentTracks.length}
-                  </Text>
-                </Pressable>
-              ) : null}
-              {playlists.map((playlist, index) => (
-                <Pressable
-                  key={`source-playlist-${playlist.id}-${index}`}
-                  onPress={() => selectPlaylist(playlist.id)}
-                  style={[
-                    styles.sourceChip,
-                    selectedPlaylistId === playlist.id
-                      ? styles.sourceChipActive
-                      : null,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.sourceChipLabel,
+                      styles.sourceChip,
                       selectedPlaylistId === playlist.id
-                        ? styles.sourceChipLabelActive
+                        ? styles.sourceChipActive
                         : null,
                     ]}
                   >
-                    {playlist.name}
+                    <Text
+                      style={[
+                        styles.sourceChipLabel,
+                        selectedPlaylistId === playlist.id
+                          ? styles.sourceChipLabelActive
+                          : null,
+                      ]}
+                    >
+                      {playlist.name}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.sourceChipCount,
+                        selectedPlaylistId === playlist.id
+                          ? styles.sourceChipCountActive
+                          : null,
+                      ]}
+                    >
+                      {playlist.trackCount}
+                    </Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            ) : null}
+
+            {activePanel === 'search' ? (
+              <>
+                <View style={styles.searchPanelHeader}>
+                  <Text style={styles.eyebrow}>Search</Text>
+                  <Text style={styles.sectionTitle}>Find your sound</Text>
+                </View>
+                <View style={styles.searchPill}>
+                  <Ionicons color={theme.muted} name="search" size={18} />
+                  <TextInput
+                    autoCapitalize="none"
+                    autoFocus
+                    onChangeText={setSearchQuery}
+                    placeholder="Search songs, artists, albums"
+                    placeholderTextColor={theme.muted}
+                    style={styles.searchInput}
+                    value={searchQuery}
+                  />
+                </View>
+                <View style={styles.sectionHeader}>
+                  <Text style={styles.sectionTitle}>Results</Text>
+                  <Text style={styles.sectionAction}>
+                    {visibleTracks.length} tracks
                   </Text>
-                  <Text
-                    style={[
-                      styles.sourceChipCount,
-                      selectedPlaylistId === playlist.id
-                        ? styles.sourceChipCountActive
-                        : null,
-                    ]}
-                  >
-                    {playlist.trackCount}
-                  </Text>
-                </Pressable>
-              ))}
-            </ScrollView>
+                </View>
+                <View style={styles.trackList}>
+                  {visibleTracks.map((track, index) => {
+                    const isSelected = track.id === selectedTrackId;
+
+                    return (
+                      <Pressable
+                        key={`search-${track.id}-${index}`}
+                        onLongPress={() => openTrackActionSheet(track.id)}
+                        onPress={() => openTrackDetail(track.id)}
+                        style={[
+                          styles.trackRow,
+                          isSelected ? styles.trackRowActive : null,
+                        ]}
+                      >
+                        <Ionicons
+                          color={isSelected ? theme.secondary : theme.muted}
+                          name="search"
+                          size={18}
+                        />
+                        <TrackArt track={track} size="small" />
+                        <View style={styles.trackMeta}>
+                          <Text style={styles.trackName} numberOfLines={1}>
+                            {track.title}
+                          </Text>
+                          <Text style={styles.trackSubtext} numberOfLines={1}>
+                            {track.artist} - {track.album}
+                          </Text>
+                        </View>
+                        <Text style={styles.trackDuration}>
+                          {durationByTrackId[track.id] ?? track.duration}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                  {!visibleTracks.length ? (
+                    <View style={styles.emptyCard}>
+                      <Text style={styles.emptyTitle}>No tracks found</Text>
+                      <Text style={styles.caption}>
+                        Try a different song, artist, album, or mood.
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+              </>
+            ) : null}
 
             {activePanel === 'flow' ? (
               <>
@@ -2036,36 +2563,40 @@ export default function App() {
                       name={isPlaying ? 'pause' : 'play'}
                       size={18}
                     />
-                    <Text style={styles.heroPlayLabel}>
+                    {/* <Text style={styles.heroPlayLabel}>
                       {isPlaying ? 'Pause' : 'Play'}
-                    </Text>
+                    </Text> */}
                   </Pressable>
                   <Pressable
-                    onPress={() => void toggleLikeTrack(selectedTrack.id)}
+                    onPress={() => handleLikePress(selectedTrack.id)}
                     style={[
                       styles.heroSubtleButton,
                       isSelectedTrackLiked ? styles.heroSubtleButtonActive : null,
                     ]}
                   >
-                    <Ionicons
-                      color={isSelectedTrackLiked ? '#ff7a59' : theme.text}
-                      name={isSelectedTrackLiked ? 'heart' : 'heart-outline'}
-                      size={18}
-                    />
-                    <Text style={styles.heroSubtleLabel}>
+                    <Animated.View
+                      style={[
+                        likedPulseTrackId === selectedTrack.id
+                          ? { transform: [{ scale: likeScaleAnim }] }
+                          : null,
+                      ]}
+                    >
+                      <Ionicons
+                        color={isSelectedTrackLiked ? '#ff7a59' : theme.text}
+                        name={isSelectedTrackLiked ? 'heart' : 'heart-outline'}
+                        size={18}
+                      />
+                    </Animated.View>
+                    {/* <Text style={styles.heroSubtleLabel}>
                       {isSelectedTrackLiked ? 'Liked' : 'Like'}
-                    </Text>
+                    </Text> */}
                   </Pressable>
                   <Pressable
-                    disabled={!addTargetPlaylist}
-                    onPress={() => void addCurrentTrackToPlaylist()}
-                    style={[
-                      styles.heroSubtleButton,
-                      !addTargetPlaylist ? styles.heroSubtleButtonDisabled : null,
-                    ]}
+                    onPress={openCurrentTrackPlaylistSheet}
+                    style={styles.heroSubtleButton}
                   >
                     <Ionicons color={theme.text} name="add" size={18} />
-                    <Text style={styles.heroSubtleLabel}>Add</Text>
+                    {/* <Text style={styles.heroSubtleLabel}>Add</Text> */}
                   </Pressable>
                 </View>
                 {/* {isSoundLoading ? (
@@ -2075,31 +2606,76 @@ export default function App() {
             </View>
 
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Signal blends</Text>
-              <Text style={styles.sectionAction}>Refresh</Text>
+              <Text style={styles.sectionTitle}>Featured artists</Text>
+              <Text style={styles.sectionAction}>{artists.length} profiles</Text>
             </View>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.mixScroller}
+              contentContainerStyle={styles.collectionScroller}
             >
-              {mixes.map((mix) => (
-                <View style={styles.mixCard} key={mix.title}>
-                  <TrackArt track={{ coverClass: mix.coverClass }} size="small" />
-                  <Text style={styles.mixTitle}>{mix.title}</Text>
-                  <Text style={styles.mixDetail}>{mix.detail}</Text>
-                </View>
-              ))}
+              {artists.slice(0, 8).map((artist) => {
+                const sampleTrack = artist.tracks[0];
+
+                return (
+                  <LibraryCollectionCard
+                    artwork={
+                      sampleTrack
+                        ? { kind: 'track', track: sampleTrack }
+                        : { kind: 'initial', label: artist.name }
+                    }
+                    colors={theme}
+                    key={`flow-artist-${artist.id}`}
+                    onPress={() => selectArtist(artist.id)}
+                    subtitle={`Artist · ${artist.trackCount} tracks · ${artist.albumCount} albums`}
+                    title={artist.name}
+                  />
+                );
+              })}
+            </ScrollView>
+
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Albums for you</Text>
+              <Text style={styles.sectionAction}>{albums.length} releases</Text>
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.collectionScroller}
+            >
+              {albums.slice(0, 8).map((album) => {
+                const sampleTrack = album.tracks[0];
+
+                return (
+                  <LibraryCollectionCard
+                    artwork={
+                      sampleTrack
+                        ? { kind: 'track', track: sampleTrack }
+                        : {
+                            kind: 'icon',
+                            icon: 'albums',
+                            color: theme.accent,
+                            backgroundColor: 'rgba(245,193,93,0.12)',
+                          }
+                    }
+                    colors={theme}
+                    key={`flow-album-${album.id}`}
+                    onPress={() => selectAlbum(album.id)}
+                    subtitle={`Album · ${album.artist} · ${album.trackCount} tracks`}
+                    title={album.title}
+                  />
+                );
+              })}
             </ScrollView>
 
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Track runway</Text>
               <Text style={styles.sectionAction}>
-                {visibleTracks.length} tracks
+                {currentTracks.length} tracks
               </Text>
             </View>
             <View style={styles.trackList}>
-              {visibleTracks.map((track, index) => {
+              {currentTracks.map((track, index) => {
                 const isSelected = track.id === selectedTrackId;
 
                 return (
@@ -2137,27 +2713,35 @@ export default function App() {
                       }
                       onPress={(event) => {
                         event.stopPropagation();
-                        void toggleLikeTrack(track.id);
+                        handleLikePress(track.id);
                       }}
                       style={styles.rowIconButton}
                     >
-                      <Ionicons
-                        color={
-                          favoriteTracks.some(
-                            (favorite) => favorite.id === track.id,
-                          )
-                            ? '#ff7a59'
-                            : theme.muted
-                        }
-                        name={
-                          favoriteTracks.some(
-                            (favorite) => favorite.id === track.id,
-                          )
-                            ? 'heart'
-                            : 'heart-outline'
-                        }
-                        size={19}
-                      />
+                      <Animated.View
+                        style={[
+                          likedPulseTrackId === track.id
+                            ? { transform: [{ scale: likeScaleAnim }] }
+                            : null,
+                        ]}
+                      >
+                        <Ionicons
+                          color={
+                            favoriteTracks.some(
+                              (favorite) => favorite.id === track.id,
+                            )
+                              ? '#ff7a59'
+                              : theme.muted
+                          }
+                          name={
+                            favoriteTracks.some(
+                              (favorite) => favorite.id === track.id,
+                            )
+                              ? 'heart'
+                              : 'heart-outline'
+                          }
+                          size={19}
+                        />
+                      </Animated.View>
                     </Pressable>
                     <Text style={styles.trackDuration}>
                       {durationByTrackId[track.id] ?? track.duration}
@@ -2165,11 +2749,11 @@ export default function App() {
                   </Pressable>
                 );
               })}
-              {!visibleTracks.length ? (
+              {!currentTracks.length ? (
                 <View style={styles.emptyCard}>
-                  <Text style={styles.emptyTitle}>No tracks found</Text>
+                  <Text style={styles.emptyTitle}>No tracks here yet</Text>
                   <Text style={styles.caption}>
-                    Try a different song, artist, album, or mood.
+                    Pick a different library source to keep listening.
                   </Text>
                 </View>
               ) : null}
@@ -2203,8 +2787,24 @@ export default function App() {
 
             {activePanel === 'library' ? (
               <>
+                <View style={styles.libraryOverviewCard}>
+                  <View style={styles.libraryOverviewIcon}>
+                    <Ionicons
+                      color={theme.accentText}
+                      name="library"
+                      size={22}
+                    />
+                  </View>
+                  <View style={styles.libraryOverviewCopy}>
+                    <Text style={styles.libraryOverviewTitle}>Your Library</Text>
+                    <Text style={styles.libraryOverviewMeta}>
+                      {libraryTracks.length} tracks · {artists.length} artists · {albums.length} albums
+                    </Text>
+                  </View>
+                </View>
+
                 <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Liked songs</Text>
+                  <Text style={styles.sectionTitle}>{t('likedSongs')}</Text>
                   <Text style={styles.sectionAction}>
                     {favoriteTracks.length} saved
                   </Text>
@@ -2249,7 +2849,7 @@ export default function App() {
                 </View>
 
                 <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Recent plays</Text>
+                  <Text style={styles.sectionTitle}>{t('recentPlays')}</Text>
                   <Text style={styles.sectionAction}>
                     {recentTracks.length} listened
                   </Text>
@@ -2294,306 +2894,324 @@ export default function App() {
                 </View>
 
                 <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Artists</Text>
+                  <Text style={styles.sectionTitle}>{t('artists')}</Text>
                   <Text style={styles.sectionAction}>
                     {artists.length} profiles
                   </Text>
                 </View>
-                <View style={styles.playlistGrid}>
-                  {artists.map((artist) => (
-                    <Pressable
-                      key={`artist-${artist.id}`}
-                      onPress={() => selectArtist(artist.id)}
-                      style={styles.playlistCard}
-                    >
-                      <Text style={styles.playlistTitle}>{artist.name}</Text>
-                      <Text style={styles.caption}>
-                        {artist.trackCount} tracks - {artist.albumCount} albums
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.collectionScroller}
+                >
+                  {artists.map((artist) => {
+                    const sampleTrack = artist.tracks[0];
+
+                    return (
+                      <LibraryCollectionCard
+                        artwork={
+                          sampleTrack
+                            ? { kind: 'track', track: sampleTrack }
+                            : { kind: 'initial', label: artist.name }
+                        }
+                        colors={theme}
+                        key={`artist-${artist.id}`}
+                        onPress={() => selectArtist(artist.id)}
+                        subtitle={`Artist · ${artist.trackCount} tracks · ${artist.albumCount} albums`}
+                        title={artist.name}
+                      />
+                    );
+                  })}
+                </ScrollView>
 
                 <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Albums</Text>
+                  <Text style={styles.sectionTitle}>{t('albums')}</Text>
                   <Text style={styles.sectionAction}>
                     {albums.length} releases
                   </Text>
                 </View>
-                <View style={styles.playlistGrid}>
-                  {albums.map((album) => (
-                    <Pressable
-                      key={`album-${album.id}`}
-                      onPress={() => selectAlbum(album.id)}
-                      style={styles.playlistCard}
-                    >
-                      <Text style={styles.playlistTitle}>{album.title}</Text>
-                      <Text style={styles.caption}>
-                        {album.artist} - {album.trackCount} tracks
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.collectionScroller}
+                >
+                  {albums.map((album) => {
+                    const sampleTrack = album.tracks[0];
+
+                    return (
+                      <LibraryCollectionCard
+                        artwork={
+                          sampleTrack
+                            ? { kind: 'track', track: sampleTrack }
+                            : {
+                                kind: 'icon',
+                                icon: 'albums',
+                                color: theme.accent,
+                                backgroundColor: 'rgba(245,193,93,0.12)',
+                              }
+                        }
+                        colors={theme}
+                        key={`album-${album.id}`}
+                        onPress={() => selectAlbum(album.id)}
+                        subtitle={`Album · ${album.artist} · ${album.trackCount} tracks`}
+                        title={album.title}
+                      />
+                    );
+                  })}
+                </ScrollView>
+
+                {singers.length > 0 && (
+                  <>
+                    <View style={styles.sectionHeader}>
+                      <Text style={styles.sectionTitle}>{t('singers')}</Text>
+                      <Text style={styles.sectionAction}>
+                        {singers.length} profiles
                       </Text>
-                    </Pressable>
-                  ))}
-                </View>
+                    </View>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.collectionScroller}
+                    >
+                      {singers.map((singer) => (
+                        <LibraryCollectionCard
+                          artwork={
+                            singer.imageName
+                              ? {
+                                  kind: 'image',
+                                  uri: `${apiBaseUrl}/uploads/people/${singer.imageName}`,
+                                  shape: 'round',
+                                }
+                              : { kind: 'initial', label: singer.name }
+                          }
+                          colors={theme}
+                          key={`singer-${singer.id}`}
+                          onPress={() => selectSinger(singer.id)}
+                          subtitle={`Singer · ${singer.trackCount} tracks`}
+                          title={singer.name}
+                        />
+                      ))}
+                    </ScrollView>
+                  </>
+                )}
+
+                {lyricists.length > 0 && (
+                  <>
+                    <View style={styles.sectionHeader}>
+                      <Text style={styles.sectionTitle}>{t('lyricists')}</Text>
+                      <Text style={styles.sectionAction}>
+                        {lyricists.length} profiles
+                      </Text>
+                    </View>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.collectionScroller}
+                    >
+                      {lyricists.map((lyricist) => (
+                        <LibraryCollectionCard
+                          artwork={
+                            lyricist.imageName
+                              ? {
+                                  kind: 'image',
+                                  uri: `${apiBaseUrl}/uploads/people/${lyricist.imageName}`,
+                                }
+                              : {
+                                  kind: 'icon',
+                                  icon: 'create',
+                                  color: theme.secondary,
+                                  backgroundColor: 'rgba(85,214,194,0.12)',
+                                }
+                          }
+                          colors={theme}
+                          key={`lyricist-${lyricist.id}`}
+                          onPress={() => selectLyricist(lyricist.id)}
+                          subtitle={`Lyricist · ${lyricist.trackCount} tracks`}
+                          title={lyricist.name}
+                        />
+                      ))}
+                    </ScrollView>
+                  </>
+                )}
 
                 <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>Playlists</Text>
+                  <Text style={styles.sectionTitle}>{t('crates')}</Text>
                   <Text style={styles.sectionAction}>{playlists.length} crates</Text>
                 </View>
-                <View style={styles.playlistGrid}>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.collectionScroller}
+                >
                   {playlists.map((playlist, index) => (
-                    <Pressable
+                    <LibraryCollectionCard
+                      artwork={{
+                        kind: 'icon',
+                        icon: 'musical-notes',
+                        color: theme.accentText,
+                        backgroundColor: theme.accent,
+                      }}
+                      colors={theme}
                       key={`library-playlist-${playlist.id}-${index}`}
                       onPress={() => {
                         setSelectedPlaylistId(playlist.id);
-                        setActivePanel('profile');
+                        setActivePanel('flow');
                       }}
-                      style={styles.playlistCard}
-                    >
-                      <Text style={styles.playlistTitle}>{playlist.name}</Text>
-                      <Text style={styles.caption}>
-                        {playlist.trackCount} tracks
-                      </Text>
-                    </Pressable>
+                      subtitle={`Playlist · ${playlist.trackCount} tracks`}
+                      title={playlist.name}
+                    />
                   ))}
-                </View>
+                </ScrollView>
               </>
             ) : null}
 
             {activePanel === 'profile' ? (
-              <>
-                <View style={styles.profileCard}>
-                  <View style={styles.profileAvatar}>
-                    <Text style={styles.profileAvatarText}>
-                      {session.user.profileName.charAt(0).toUpperCase()}
-                    </Text>
-                  </View>
-                  <View style={styles.profileCopy}>
-                    <Text style={styles.profileName}>
-                      {session.user.profileName}
-                    </Text>
-                    <Text style={styles.caption}>{session.user.email}</Text>
-                    {session.user.role === 'admin' ? (
-                      <View style={styles.roleBadge}>
-                        <Text style={styles.roleBadgeText}>ADMIN</Text>
-                      </View>
-                    ) : null}
-                  </View>
-                </View>
-
-                <View style={styles.statsRow}>
-                  <View style={styles.statCard}>
-                    <Text style={styles.statValue}>{favoriteTracks.length}</Text>
-                    <Text style={styles.statLabel}>Liked</Text>
-                  </View>
-                  <View style={styles.statCard}>
-                    <Text style={styles.statValue}>{playlists.length}</Text>
-                    <Text style={styles.statLabel}>Playlists</Text>
-                  </View>
-                  <View style={styles.statCard}>
-                    <Text style={styles.statValue}>{libraryTracks.length}</Text>
-                    <Text style={styles.statLabel}>Library</Text>
-                  </View>
-                </View>
-
-                <View style={styles.managementCard}>
-                  <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionTitle}>Current track</Text>
-                    <Pressable onPress={() => toggleLikeTrack(selectedTrackId)}>
-                      <Ionicons
-                        color={isSelectedTrackLiked ? '#ff7a59' : theme.mutedStrong}
-                        name={isSelectedTrackLiked ? 'heart' : 'heart-outline'}
-                        size={24}
-                      />
-                    </Pressable>
-                  </View>
-                  <View style={styles.queueItem}>
-                    <TrackArt track={selectedTrack} size="small" />
-                    <View style={styles.trackMeta}>
-                      <Text style={styles.trackName}>{selectedTrack.title}</Text>
-                      <Text style={styles.trackSubtext}>
-                        {selectedTrack.artist} - {selectedTrack.mood}
-                      </Text>
-                    </View>
-                  </View>
-                  <Pressable
-                    onPress={() => void addCurrentTrackToPlaylist()}
-                    style={styles.secondaryAction}
+              <View style={styles.spotifyProfileContainer}>
+                {/* Header Section */}
+                <View style={styles.spotifyHeader}>
+                  <Pressable 
+                    onPress={() => setIsSettingsOpen(true)}
+                    style={styles.spotifySettingsButton}
                   >
-                    <Ionicons color={theme.text} name="add" size={18} />
-                    <Text style={styles.secondaryActionLabel}>
-                      Add to selected playlist
-                    </Text>
+                    <Ionicons color={theme.text} name="settings-outline" size={24} />
                   </Pressable>
+                  
+                  <Pressable 
+                    onPress={() => void handleUploadAvatar()}
+                    style={({ pressed }) => [styles.spotifyAvatarContainer, pressed && { opacity: 0.8 }]}
+                  >
+                    {session.user.avatarUrl ? (
+                      <Image
+                        source={{ uri: session.user.avatarUrl }}
+                        style={styles.spotifyAvatarLarge}
+                      />
+                    ) : (
+                      <View style={[styles.spotifyAvatarLarge, styles.spotifyAvatarPlaceholder]}>
+                        <Text style={styles.spotifyAvatarInitial}>
+                          {session.user.profileName.charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                    )}
+                    <View style={styles.profileCameraBadge}>
+                      <Ionicons name="camera" size={16} color="#fff" />
+                    </View>
+                  </Pressable>
+                  
+                  <Text style={styles.spotifyName}>{session.user.profileName}</Text>
+                  
+                  <Text style={styles.spotifyStatsInline}>
+                    {favoriteTracks.length} Liked • {playlists.length} Playlists • {libraryTracks.length} Tracks
+                  </Text>
                 </View>
 
-                <View style={styles.managementCard}>
-                  <Text style={styles.sectionTitle}>Create playlist</Text>
-                  <View style={styles.createPlaylistRow}>
+                {/* Playlists Section */}
+                <View style={styles.spotifyPlaylistsSection}>
+                  <Text style={styles.spotifySectionTitle}>Your Playlists</Text>
+                  
+                  {/* Create Playlist Row */}
+                  <View style={styles.spotifyCreatePlaylistRow}>
+                    <View style={styles.spotifyCreateIconContainer}>
+                      <Ionicons color={theme.accentText} name="add" size={24} />
+                    </View>
                     <TextInput
                       onChangeText={setNewPlaylistName}
-                      placeholder="Playlist name"
+                      placeholder="Name a new playlist..."
                       placeholderTextColor={theme.muted}
-                      style={[styles.input, styles.playlistInput]}
+                      style={styles.spotifyCreateInput}
                       value={newPlaylistName}
+                      onSubmitEditing={createPlaylist}
                     />
-                    <Pressable onPress={createPlaylist} style={styles.addButton}>
-                      <LinearGradient
-                        colors={[theme.accent, theme.secondary]}
-                        end={{ x: 1, y: 1 }}
-                        start={{ x: 0, y: 0 }}
-                        style={StyleSheet.absoluteFill}
-                      />
-                      <Ionicons color={theme.accentText} name="add" size={22} />
-                    </Pressable>
-                  </View>
-                </View>
-
-                <View style={styles.managementCard}>
-                  <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionTitle}>Manage playlists</Text>
-                    {selectedPlaylist ? (
-                      <Text style={styles.sectionAction}>
-                        {selectedPlaylist.trackCount} tracks
-                      </Text>
-                    ) : null}
+                    {newPlaylistName.trim().length > 0 && (
+                      <Pressable onPress={createPlaylist} style={styles.spotifyCreateButton}>
+                        <Text style={styles.spotifyCreateButtonText}>Create</Text>
+                      </Pressable>
+                    )}
                   </View>
 
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.playlistScroller}
-                  >
-                    {playlists.map((playlist, index) => (
-                      <Pressable
-                        key={`manage-playlist-${playlist.id}-${index}`}
-                        onPress={() => setSelectedPlaylistId(playlist.id)}
-                        style={[
-                          styles.playlistChip,
-                          selectedPlaylist?.id === playlist.id
-                            ? styles.playlistChipActive
-                            : null,
-                        ]}
-                      >
-                        <Text
+                  {/* Playlists List */}
+                  {playlists.length > 0 ? (
+                    <View style={styles.spotifyPlaylistsList}>
+                      {playlists.map((playlist, index) => (
+                        <Pressable
+                          key={`spotify-playlist-${playlist.id}-${index}`}
+                          onPress={() => setSelectedPlaylistId(playlist.id)}
                           style={[
-                            styles.playlistChipText,
-                            selectedPlaylist?.id === playlist.id
-                              ? styles.playlistChipTextActive
-                              : null,
+                            styles.spotifyPlaylistRow,
+                            selectedPlaylist?.id === playlist.id && styles.spotifyPlaylistRowActive
                           ]}
                         >
-                          {playlist.name}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </ScrollView>
-
-                  {selectedPlaylist ? (
-                    <>
-                      {selectedPlaylist.tracks.length ? (
-                        selectedPlaylist.tracks.map((track, index) => (
-                          <View
-                            style={styles.playlistTrackRow}
-                            key={`playlist-track-${track.id}-${index}`}
-                          >
-                            <Pressable
-                              onLongPress={() => openTrackActionSheet(track.id)}
-                              onPress={() => openTrackDetail(track.id)}
-                              style={styles.playlistTrackPressable}
-                            >
-                              <TrackArt track={track} size="small" />
-                              <View style={styles.trackMeta}>
-                                <Text style={styles.trackName} numberOfLines={1}>
-                                  {track.title}
-                                </Text>
-                                <Text
-                                  style={styles.trackSubtext}
-                                  numberOfLines={1}
-                                >
-                                  {track.artist}
-                                </Text>
-                              </View>
-                            </Pressable>
-                            <Pressable
-                              onPress={() =>
-                                removeTrackFromPlaylist(
-                                  selectedPlaylist.id,
-                                  track.id,
-                                )
-                              }
-                              style={styles.removeButton}
-                            >
-                              <Ionicons
-                                color={theme.danger}
-                                name="remove"
-                                size={18}
-                              />
-                            </Pressable>
+                          <View style={styles.spotifyPlaylistCover}>
+                            <Ionicons color={theme.muted} name="musical-notes" size={24} />
                           </View>
-                        ))
-                      ) : (
-                        <Text style={styles.caption}>
-                          This playlist is empty. Add the current track when it
-                          fits the mood.
-                        </Text>
-                      )}
-
-                      <Pressable
-                        onPress={() => deletePlaylist(selectedPlaylist.id)}
-                        style={styles.deletePlaylistButton}
-                      >
-                        <Text style={styles.deletePlaylistText}>
-                          Delete playlist
-                        </Text>
-                      </Pressable>
-                    </>
+                          <View style={styles.spotifyPlaylistMeta}>
+                            <Text style={styles.spotifyPlaylistName}>{playlist.name}</Text>
+                            <Text style={styles.spotifyPlaylistSubtext}>{playlist.trackCount} tracks</Text>
+                          </View>
+                          <Pressable
+                            onPress={() => deletePlaylist(playlist.id)}
+                            style={styles.spotifyPlaylistDelete}
+                          >
+                            <Ionicons color={theme.muted} name="trash-outline" size={20} />
+                          </Pressable>
+                        </Pressable>
+                      ))}
+                    </View>
                   ) : (
-                    <Text style={styles.caption}>
-                      Create a playlist to start collecting tracks.
-                    </Text>
+                    <View style={styles.spotifyEmptyState}>
+                      <Text style={styles.spotifyEmptyStateText}>You don't have any playlists yet.</Text>
+                    </View>
+                  )}
+
+                  {/* Tracks of Selected Playlist */}
+                  {selectedPlaylist && selectedPlaylist.tracks.length > 0 && (
+                    <View style={styles.spotifySelectedPlaylistContainer}>
+                      <Text style={styles.spotifySectionTitle}>{selectedPlaylist.name} Tracks</Text>
+                      {selectedPlaylist.tracks.map((track, index) => (
+                        <View
+                          style={styles.playlistTrackRow}
+                          key={`spotify-playlist-track-${track.id}-${index}`}
+                        >
+                          <Pressable
+                            onLongPress={() => openTrackActionSheet(track.id)}
+                            onPress={() => openTrackDetail(track.id)}
+                            style={styles.playlistTrackPressable}
+                          >
+                            <TrackArt track={track} size="small" />
+                            <View style={styles.trackMeta}>
+                              <Text style={styles.trackName} numberOfLines={1}>
+                                {track.title}
+                              </Text>
+                              <Text
+                                style={styles.trackSubtext}
+                                numberOfLines={1}
+                              >
+                                {track.artist}
+                              </Text>
+                            </View>
+                          </Pressable>
+                          <Pressable
+                            onPress={() =>
+                              removeTrackFromPlaylist(
+                                selectedPlaylist.id,
+                                track.id,
+                              )
+                            }
+                            style={styles.removeButton}
+                          >
+                            <Ionicons
+                              color={theme.danger}
+                              name="remove"
+                              size={18}
+                            />
+                          </Pressable>
+                        </View>
+                      ))}
+                    </View>
                   )}
                 </View>
-
-                <View style={styles.managementCard}>
-                  <Pressable
-                    onPress={() => setIsDeleteAccountConfirming(true)}
-                    style={[styles.deletePlaylistButton, styles.deleteAccountButton]}
-                  >
-                    <Ionicons
-                      color={theme.danger}
-                      name="trash-outline"
-                      size={18}
-                    />
-                    <Text style={[styles.deletePlaylistText, styles.deleteAccountText]}>
-                      Delete Account
-                    </Text>
-                  </Pressable>
-                  {session.user.role === 'admin' ? (
-                    <Pressable
-                      onPress={() => setIsAdminViewOpen(true)}
-                      style={({ pressed }) => [
-                        styles.adminButton,
-                        pressed && styles.adminButtonPressed,
-                      ]}
-                    >
-                      <LinearGradient
-                        colors={[theme.accent, theme.secondary]}
-                        end={{ x: 1, y: 1 }}
-                        start={{ x: 0, y: 0 }}
-                        style={styles.adminButtonGradient}
-                      >
-                        <Ionicons
-                          color={theme.accentText}
-                          name="cloud-upload"
-                          size={14}
-                        />
-                        <Text style={styles.adminButtonText}>Admin panel</Text>
-                      </LinearGradient>
-                    </Pressable>
-                  ) : null}
-                </View>
-              </>
+              </View>
             ) : null}
+            </Animated.View>
           </ScrollView>
 
           <Modal
@@ -2770,6 +3388,32 @@ export default function App() {
                             Create a playlist from Profile first.
                           </Text>
                         )}
+
+                        <View style={styles.sheetCreatePlaylistRow}>
+                          <TextInput
+                            onChangeText={setNewPlaylistName}
+                            placeholder="New playlist"
+                            placeholderTextColor={theme.muted}
+                            style={styles.sheetCreatePlaylistInput}
+                            value={newPlaylistName}
+                          />
+                          <Pressable
+                            disabled={!newPlaylistName.trim()}
+                            onPress={() =>
+                              void createPlaylistAndAddCurrentTrack(actionTrack.id)
+                            }
+                            style={[
+                              styles.sheetCreatePlaylistButton,
+                              !newPlaylistName.trim() ? styles.disabledButton : null,
+                            ]}
+                          >
+                            <Ionicons
+                              color={theme.accentText}
+                              name="add"
+                              size={20}
+                            />
+                          </Pressable>
+                        </View>
                       </View>
                     )}
                   </>
@@ -2779,12 +3423,76 @@ export default function App() {
           </Modal>
 
           <Modal
-            animationType="slide"
+            animationType="none"
             onRequestClose={closeTrackDetail}
-            presentationStyle="fullScreen"
+            presentationStyle="overFullScreen"
+            transparent
             visible={isTrackDetailOpen}
           >
-            <SafeAreaView style={styles.detailScreen}>
+            <View style={styles.playerModalRoot}>
+              <AnimatedBlurView
+                intensity={42}
+                pointerEvents="none"
+                style={[
+                  StyleSheet.absoluteFillObject,
+                  { opacity: playerBackdropOpacity },
+                ]}
+                tint={themeMode === 'dark' ? 'dark' : 'light'}
+              />
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  StyleSheet.absoluteFillObject,
+                  {
+                    backgroundColor:
+                      themeMode === 'dark'
+                        ? 'rgba(8, 6, 14, 0.46)'
+                        : 'rgba(255, 255, 255, 0.28)',
+                    opacity: playerBackdropOpacity,
+                  },
+                ]}
+              />
+            <Animated.View
+              onTouchCancel={handleDetailTouchCancel}
+              onTouchEnd={handleDetailTouchEnd}
+              onTouchMove={handleDetailTouchMove}
+              onTouchStart={handleDetailTouchStart}
+              style={{
+                flex: 1,
+                opacity: playerSheetOpacity,
+                transform: [{ translateY: playerSheetY }],
+              }}
+            >
+              <View
+                pointerEvents="none"
+                style={styles.detailBackgroundSolid}
+              />
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.detailBackgroundTopSolid,
+                  { opacity: detailTopSolidOpacity },
+                ]}
+              />
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.detailBackgroundFade,
+                  { opacity: detailInitialFadeOpacity },
+                ]}
+              >
+                <LinearGradient
+                  colors={[
+                    themeMode === 'dark'
+                      ? 'rgba(18, 15, 24, 0)'
+                      : 'rgba(247, 242, 234, 0)',
+                    theme.background,
+                  ]}
+                  locations={[0, 1]}
+                  style={StyleSheet.absoluteFillObject}
+                />
+              </Animated.View>
+              <SafeAreaView style={styles.detailScreen}>
               <View style={styles.detailHeader}>
                 <Pressable
                   accessibilityLabel="Close track details"
@@ -2804,14 +3512,22 @@ export default function App() {
                     accessibilityLabel={
                       isSelectedTrackLiked ? 'Unlike track' : 'Like track'
                     }
-                    onPress={() => void toggleLikeTrack(selectedTrack.id)}
+                    onPress={() => handleLikePress(selectedTrack.id)}
                     style={styles.detailHeaderButton}
                   >
-                    <Ionicons
-                      color={isSelectedTrackLiked ? '#ff7a59' : theme.text}
-                      name={isSelectedTrackLiked ? 'heart' : 'heart-outline'}
-                      size={23}
-                    />
+                    <Animated.View
+                      style={[
+                        likedPulseTrackId === selectedTrack.id
+                          ? { transform: [{ scale: likeScaleAnim }] }
+                          : null,
+                      ]}
+                    >
+                      <Ionicons
+                        color={isSelectedTrackLiked ? '#ff7a59' : theme.text}
+                        name={isSelectedTrackLiked ? 'heart' : 'heart-outline'}
+                        size={23}
+                      />
+                    </Animated.View>
                   </Pressable>
                   <Pressable
                     accessibilityLabel="More actions"
@@ -2827,7 +3543,15 @@ export default function App() {
                 </View>
               </View>
 
-              <View style={styles.detailBody}>
+              <Animated.View
+                style={[
+                  styles.detailBody,
+                  {
+                    opacity: detailTrackSwipeOpacity,
+                    transform: [{ translateX: detailTrackSwipeX }],
+                  },
+                ]}
+              >
                 <TrackArt track={selectedTrack} size="large" />
                 <View style={styles.detailTrackCopy}>
                   <Text style={styles.detailTitle} numberOfLines={3}>
@@ -2842,7 +3566,7 @@ export default function App() {
                   <Text style={styles.chip}>{selectedTrack.plays} plays</Text>
                   <Text style={styles.chip}>{selectedRuntimeLabel}</Text>
                 </View>
-              </View>
+              </Animated.View>
 
               <View style={styles.detailFooter}>
                 <View style={styles.progressMeta}>
@@ -3002,7 +3726,7 @@ export default function App() {
                         value={newPlaylistName}
                       />
                       <Pressable
-                        onPress={createPlaylistAndAddCurrentTrack}
+                        onPress={() => void createPlaylistAndAddCurrentTrack()}
                         style={styles.addButton}
                       >
                         <LinearGradient
@@ -3016,8 +3740,10 @@ export default function App() {
                     </View>
                   </View>
                 ) : null}
-              </View>
-            </SafeAreaView>
+                </View>
+              </SafeAreaView>
+            </Animated.View>
+            </View>
           </Modal>
 
           <Modal
@@ -3066,13 +3792,74 @@ export default function App() {
             </Pressable>
           </Modal>
 
-          <View style={styles.nowBar}>
+          <View style={styles.bottomTabBar}>
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.bottomTabIndicator,
+                {
+                  width: bottomTabWidth - 8,
+                  transform: [{ translateX: tabIndicatorTranslateX }],
+                },
+              ]}
+            />
+            {bottomTabs.map((tab) => {
+              const isActive = activePanel === tab.id;
+              const tabScale = tabSwitchAnim.interpolate({
+                inputRange: bottomTabs.map((_, index) => index),
+                outputRange: bottomTabs.map((_, index) =>
+                  index === bottomTabs.findIndex((item) => item.id === tab.id)
+                    ? 1.05
+                    : 1,
+                ),
+              });
+
+              return (
+                <Pressable
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: isActive }}
+                  key={tab.id}
+                  onPress={() => setActivePanel(tab.id)}
+                  style={[
+                    styles.bottomTab,
+                    isActive ? styles.bottomTabActive : null,
+                  ]}
+                >
+                  <Animated.View style={{ transform: [{ scale: tabScale }] }}>
+                    <Ionicons
+                      color={isActive ? theme.accent : theme.muted}
+                      name={tab.icon}
+                      size={22}
+                    />
+                  </Animated.View>
+                  <Text
+                    style={[
+                      styles.bottomTabLabel,
+                      isActive ? styles.bottomTabLabelActive : null,
+                    ]}
+                  >
+                    {tab.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          <Animated.View
+            {...miniPlayerPanResponder.panHandlers}
+            onLayout={handleMiniPlayerLayout}
+            ref={miniPlayerRef}
+            style={[
+              styles.nowBar,
+              { transform: [{ translateY: miniPlayerDragY }] },
+            ]}
+          >
             <Pressable
-              onPress={() => setIsTrackDetailOpen(true)}
-              style={styles.nowTrack}
+              onPress={openPlayerSheetFromMiniPlayer}
+              style={styles.miniPlayerPressable}
             >
               <TrackArt track={selectedTrack} size="small" />
-              <View style={styles.trackMeta}>
+              <View style={styles.miniTrackMeta}>
                 <Text style={styles.nowTitle} numberOfLines={1}>
                   {selectedTrack.title}
                 </Text>
@@ -3080,71 +3867,27 @@ export default function App() {
                   {selectedTrack.artist}
                 </Text>
               </View>
+              <View style={styles.miniTransportRow}>
+                <Pressable onPress={selectPreviousTrack} style={styles.miniButton} hitSlop={10}>
+                  <Ionicons color={theme.text} name="play-skip-back" size={20} />
+                </Pressable>
+                <Pressable onPress={togglePlayback} style={styles.miniButton} hitSlop={10}>
+                  <Ionicons color={theme.text} name={isPlaying ? 'pause' : 'play'} size={24} />
+                </Pressable>
+                <Pressable onPress={selectNextTrack} style={styles.miniButton} hitSlop={10}>
+                  <Ionicons color={theme.text} name="play-skip-forward" size={20} />
+                </Pressable>
+              </View>
             </Pressable>
-
-            <View style={styles.transportRow}>
-              <IconButton
-                icon="shuffle"
-                label="Shuffle"
-                colors={iconButtonColors}
-                onPress={() => setIsShuffle((current) => !current)}
-                variant={isShuffle ? 'solid' : 'ghost'}
-              />
-              <IconButton
-                icon="play-skip-back"
-                label="Previous track"
-                colors={iconButtonColors}
-                onPress={selectPreviousTrack}
-              />
-              <IconButton
-                icon={isPlaying ? 'pause' : 'play'}
-                label={isPlaying ? 'Pause' : 'Play'}
-                colors={iconButtonColors}
-                onPress={togglePlayback}
-                variant="solid"
-              />
-              <IconButton
-                icon="play-skip-forward"
-                label="Next track"
-                colors={iconButtonColors}
-                onPress={selectNextTrack}
-              />
-              <IconButton
-                icon="repeat"
-                label="Repeat one"
-                colors={iconButtonColors}
-                onPress={toggleRepeatMode}
-                variant={repeatMode === 'one' ? 'solid' : 'ghost'}
+            <View style={styles.miniProgressTrack}>
+              <View
+                style={[
+                  styles.miniProgressFill,
+                  { width: `${progress}%` as `${number}%` },
+                ]}
               />
             </View>
-
-            <View style={styles.progressMeta}>
-              <Text style={styles.progressText}>
-                {formatMillis(soundPosition)}
-              </Text>
-              <Pressable
-                accessibilityLabel="Seek track"
-                onLayout={(event) =>
-                  setProgressTrackWidth(event.nativeEvent.layout.width)
-                }
-                onPress={(event) =>
-                  void seekToRatio(
-                    event.nativeEvent.locationX / progressTrackWidth,
-                  )
-                }
-                style={styles.progressTrack}
-              >
-                <View
-                  style={[
-                    styles.progressFill,
-                    { width: `${progress}%` as `${number}%` },
-                  ]}
-                />
-              </Pressable>
-              <Text style={styles.progressText}>{selectedRuntimeLabel}</Text>
-            </View>
-
-          </View>
+          </Animated.View>
         </View>
       </SafeAreaView>
     );
@@ -3611,14 +4354,18 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
   playerContent: {
     paddingHorizontal: isSmallScreen ? 12 : 16,
     paddingTop: isSmallScreen ? 8 : 12,
-    paddingBottom: isSmallScreen ? 200 : 210,
+    paddingBottom: isSmallScreen ? 265 : 280,
     gap: isSmallScreen ? 12 : 16,
   },
   appHeader: {
     alignItems: 'center',
+    backgroundColor: theme.background,
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 12,
+    paddingHorizontal: isSmallScreen ? 12 : 16,
+    paddingTop: isSmallScreen ? 8 : 12,
+    paddingBottom: 10,
   },
   brandRow: {
     alignItems: 'center',
@@ -3702,6 +4449,13 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
     fontWeight: '700',
     minHeight: 48,
     paddingVertical: 0,
+  },
+  searchPanelHeader: {
+    gap: 4,
+    paddingTop: 4,
+  },
+  tabContentAnimator: {
+    gap: isSmallScreen ? 12 : 16,
   },
   panelTabs: {
     backgroundColor: theme.surfaceSoft,
@@ -3846,6 +4600,9 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
     borderRadius: 999,
     justifyContent: 'center',
     minHeight: 52,
+  },
+  disabledButton: {
+    opacity: 0.5,
   },
   primaryButtonLabel: {
     color: theme.accentText,
@@ -4016,29 +4773,6 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
     fontSize: isSmallScreen ? 11 : 13,
     fontWeight: '800',
   },
-  mixScroller: {
-    gap: 10,
-    paddingRight: 16,
-  },
-  mixCard: {
-    backgroundColor: theme.surfaceSoft,
-    borderColor: theme.border,
-    borderRadius: 8,
-    borderWidth: 1,
-    gap: 8,
-    padding: 12,
-    width: 164,
-  },
-  mixTitle: {
-    color: theme.text,
-    fontSize: 15,
-    fontWeight: '900',
-  },
-  mixDetail: {
-    color: theme.muted,
-    fontSize: 12,
-    lineHeight: 17,
-  },
   trackList: {
     gap: 8,
   },
@@ -4121,6 +4855,43 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
   playlistGrid: {
     gap: 10,
   },
+  collectionScroller: {
+    gap: 10,
+    paddingRight: 16,
+  },
+  libraryOverviewCard: {
+    alignItems: 'center',
+    backgroundColor: theme.surface,
+    borderColor: theme.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 13,
+    padding: 15,
+  },
+  libraryOverviewIcon: {
+    alignItems: 'center',
+    backgroundColor: theme.accent,
+    borderRadius: 14,
+    height: 48,
+    justifyContent: 'center',
+    width: 48,
+  },
+  libraryOverviewCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  libraryOverviewTitle: {
+    color: theme.text,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  libraryOverviewMeta: {
+    color: theme.muted,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 3,
+  },
   playlistCard: {
     backgroundColor: 'rgba(245,193,93,0.08)',
     borderColor: theme.border,
@@ -4165,20 +4936,6 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
     color: theme.text,
     fontSize: isSmallScreen ? 18 : isMediumScreen ? 20 : 22,
     fontWeight: '900',
-  },
-  roleBadge: {
-    alignSelf: 'flex-start',
-    marginTop: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 999,
-    backgroundColor: theme.secondary,
-  },
-  roleBadgeText: {
-    color: theme.accentText,
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 1,
   },
   statsRow: {
     flexDirection: 'row',
@@ -4308,68 +5065,58 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
     textDecorationLine: 'none',
     fontWeight: '600',
   },
-  adminButton: {
-    alignSelf: 'center',
-    borderRadius: 999,
-    marginTop: 8,
-    overflow: 'hidden',
+  settingsContent: {
+    paddingHorizontal: 18,
+    paddingTop: 10,
+    paddingBottom: 72,
+    gap: 22,
   },
-  adminButtonPressed: {
-    opacity: 0.85,
-  },
-  adminButtonGradient: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-  },
-  adminButtonText: {
-    color: theme.accentText,
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 0.2,
-  },
-  adminContent: {
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    gap: 16,
-  },
-  adminHeader: {
+  settingsHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 4,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 18,
   },
-  adminBackButton: {
+  settingsBackButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingVertical: 6,
-    paddingRight: 8,
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    marginLeft: -10,
   },
-  adminBackText: {
+  settingsBackText: {
     color: theme.text,
     fontSize: 15,
     fontWeight: '700',
   },
-  adminTitle: {
+  settingsTitle: {
     color: theme.text,
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '900',
   },
-  adminCard: {
+  settingsCard: {
     backgroundColor: theme.surface,
     borderColor: theme.border,
     borderWidth: 1,
     borderRadius: 12,
     padding: 16,
-    gap: 10,
+    gap: 14,
   },
-  adminCardTitle: {
+  settingsCardTitle: {
     color: theme.text,
     fontSize: 17,
     fontWeight: '800',
+  },
+  fieldLabel: {
+    color: theme.mutedStrong,
+    fontSize: 13,
+    fontWeight: '800',
+    marginTop: 2,
+    marginBottom: -6,
   },
   filePickerButton: {
     flexDirection: 'row',
@@ -4389,42 +5136,352 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
     fontWeight: '600',
     flexShrink: 1,
   },
-  adminGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
+  spotifyProfileContainer: {
+    flex: 1,
+  },
+  spotifyHeader: {
+    alignItems: 'center',
+    paddingVertical: 32,
+    position: 'relative',
+  },
+  spotifySettingsButton: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    padding: 8,
+    zIndex: 10,
+  },
+  spotifyAvatarContainer: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    marginBottom: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  spotifyAvatarLarge: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+  },
+  spotifyAvatarPlaceholder: {
+    backgroundColor: theme.secondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  spotifyAvatarInitial: {
+    color: theme.accentText,
+    fontSize: 48,
+    fontWeight: '900',
+  },
+  spotifyName: {
+    color: theme.text,
+    fontSize: 28,
+    fontWeight: '900',
+    marginBottom: 6,
+    letterSpacing: -0.5,
+  },
+  spotifyStatsInline: {
+    color: theme.muted,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  spotifyPlaylistsSection: {
+    paddingHorizontal: 16,
+    paddingBottom: 40,
+  },
+  spotifySectionTitle: {
+    color: theme.text,
+    fontSize: 20,
+    fontWeight: '800',
+    marginBottom: 16,
     marginTop: 8,
   },
-  adminGridCard: {
-    width: '47%',
+  spotifyCreatePlaylistRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+    gap: 16,
+  },
+  spotifyCreateIconContainer: {
+    width: 48,
+    height: 48,
+    backgroundColor: theme.accent,
+    borderRadius: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  spotifyCreateInput: {
+    flex: 1,
+    color: theme.text,
+    fontSize: 16,
+    fontWeight: '600',
+    height: 48,
+  },
+  spotifyCreateButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: theme.surfaceSoft,
+    borderRadius: 999,
+  },
+  spotifyCreateButtonText: {
+    color: theme.text,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  spotifyPlaylistsList: {
+    gap: 16,
+  },
+  spotifyPlaylistRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  spotifyPlaylistRowActive: {
+    backgroundColor: theme.surfaceSoft,
+    borderRadius: 8,
+  },
+  spotifyPlaylistCover: {
+    width: 48,
+    height: 48,
+    backgroundColor: theme.surface,
+    borderRadius: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  spotifyPlaylistMeta: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  spotifyPlaylistName: {
+    color: theme.text,
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  spotifyPlaylistSubtext: {
+    color: theme.muted,
+    fontSize: 13,
+  },
+  spotifyPlaylistDelete: {
+    padding: 8,
+  },
+  spotifyEmptyState: {
+    alignItems: 'center',
+    paddingVertical: 32,
+  },
+  spotifyEmptyStateText: {
+    color: theme.muted,
+    fontSize: 15,
+  },
+  spotifySelectedPlaylistContainer: {
+    marginTop: 32,
+    borderTopWidth: 1,
+    borderTopColor: theme.border,
+    paddingTop: 16,
+  },
+  spotifySettingsSection: {
+    backgroundColor: theme.surface,
+    borderColor: theme.border,
+    borderRadius: 18,
+    borderWidth: 1,
+    gap: 14,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: theme.mode === 'dark' ? 0.18 : 0.08,
+    shadowRadius: 18,
+  },
+  spotifySettingsSectionTitle: {
+    color: theme.muted,
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 2,
+  },
+  spotifyInput: {
+    backgroundColor: theme.field,
+    borderColor: theme.border,
+    borderRadius: 12,
+    borderWidth: 1,
+    color: theme.text,
+    fontSize: 15,
+    fontWeight: '700',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    minHeight: 52,
+  },
+  modernSettingsProfileCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: theme.surface,
+    borderColor: theme.border,
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: theme.mode === 'dark' ? 0.2 : 0.08,
+    shadowRadius: 20,
+  },
+  modernAvatarContainer: {
+    position: 'relative',
+    marginRight: 16,
+  },
+  modernAvatar: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+  },
+  modernAvatarInitial: {
+    color: theme.accentText,
+    fontSize: 28,
+    fontWeight: '900',
+  },
+  cameraBadge: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    backgroundColor: '#1db954',
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: theme.background,
+  },
+  profileCameraBadge: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    backgroundColor: '#1db954',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 3,
+    borderColor: theme.background,
+  },
+  modernProfileMeta: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingRight: 16,
+  },
+  modernProfileName: {
+    color: theme.text,
+    fontSize: 19,
+    fontWeight: '800',
+    marginBottom: 3,
+    letterSpacing: -0.5,
+  },
+  modernProfileSubtitle: {
+    color: theme.muted,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  languageScroller: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingTop: 2,
+    paddingBottom: 2,
+  },
+  languageChip: {
     backgroundColor: theme.surfaceSoft,
     borderColor: theme.border,
+    borderRadius: 999,
     borderWidth: 1,
-    borderRadius: 12,
-    padding: 10,
-    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
   },
-  adminGridTitle: {
+  languageChipActive: {
+    backgroundColor: theme.accent,
+    borderColor: theme.accent,
+  },
+  languageChipText: {
     color: theme.text,
     fontSize: 14,
     fontWeight: '800',
   },
-  adminGridSub: {
-    color: theme.muted,
-    fontSize: 12,
+  languageChipTextActive: {
+    color: theme.accentText,
   },
-  adminGridRemove: {
-    marginTop: 4,
-    paddingVertical: 8,
+  settingsPrimaryAction: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: theme.accent,
+    borderRadius: 999,
+    justifyContent: 'center',
+    marginTop: 2,
+    minHeight: 44,
+    paddingHorizontal: 18,
+  },
+  settingsPrimaryActionText: {
+    color: theme.accentText,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  settingsSecondaryAction: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: theme.surfaceSoft,
+    borderColor: theme.border,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: theme.border,
-    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+    minHeight: 44,
+    paddingHorizontal: 18,
   },
-  adminGridRemoveText: {
-    color: theme.danger,
+  settingsSecondaryActionText: {
+    color: theme.text,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  accountRemovalSection: {
+    alignItems: 'center',
+    backgroundColor: theme.dangerSoft,
+    borderColor: theme.mode === 'dark'
+      ? 'rgba(255,154,165,0.28)'
+      : 'rgba(201,63,77,0.2)',
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 14,
+    padding: 16,
+  },
+  accountRemovalCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  accountRemovalTitle: {
+    color: theme.text,
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  accountRemovalDescription: {
+    color: theme.muted,
+    fontSize: 12,
+    fontWeight: '600',
+    lineHeight: 17,
+  },
+  deleteAccountAction: {
+    alignItems: 'center',
+    backgroundColor: theme.danger,
+    borderRadius: 999,
+    justifyContent: 'center',
+    minHeight: 42,
+    paddingHorizontal: 16,
+  },
+  deleteAccountActionText: {
+    color: '#fff',
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: '900',
   },
   otpTitle: {
     color: theme.text,
@@ -4566,22 +5623,73 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
   },
+  sheetCreatePlaylistRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+  },
+  sheetCreatePlaylistInput: {
+    backgroundColor: theme.field,
+    borderColor: theme.border,
+    borderRadius: 10,
+    borderWidth: 1,
+    color: theme.text,
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+    minHeight: 46,
+    paddingHorizontal: 12,
+  },
+  sheetCreatePlaylistButton: {
+    alignItems: 'center',
+    backgroundColor: theme.accent,
+    borderRadius: 999,
+    height: 46,
+    justifyContent: 'center',
+    width: 46,
+  },
   detailScreen: {
-    backgroundColor: theme.background,
     flex: 1,
     paddingHorizontal: isSmallScreen ? 18 : 24,
     paddingVertical: 16,
+  },
+  detailBackgroundFade: {
+    height: detailBackgroundFadeHeight,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
+  detailBackgroundSolid: {
+    backgroundColor: theme.background,
+    bottom: 0,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: detailBackgroundFadeHeight,
+  },
+  detailBackgroundTopSolid: {
+    backgroundColor: theme.background,
+    height: detailBackgroundFadeHeight,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
   },
   detailHeader: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
     minHeight: 52,
+    position: 'relative',
   },
   detailHeaderActions: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 8,
+    zIndex: 2,
   },
   detailHeaderButton: {
     alignItems: 'center',
@@ -4592,12 +5700,18 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
     height: 44,
     justifyContent: 'center',
     width: 44,
+    zIndex: 2,
   },
   detailHeaderCopy: {
     alignItems: 'center',
-    flex: 1,
-    minWidth: 0,
-    paddingHorizontal: 14,
+    bottom: 0,
+    justifyContent: 'center',
+    left: 0,
+    paddingHorizontal: isSmallScreen ? 92 : 108,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    zIndex: 1,
   },
   detailEyebrow: {
     color: theme.secondary,
@@ -4703,30 +5817,104 @@ const createStyles = (theme: AppTheme) => StyleSheet.create({
     justifyContent: 'center',
     width: 38,
   },
+  playerModalRoot: {
+    flex: 1,
+    overflow: 'hidden',
+  },
   nowBar: {
     backgroundColor: theme.surfaceStrong,
     borderColor: theme.border,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    borderWidth: 1,
-    bottom: 0,
-    gap: isSmallScreen ? 8 : 10,
+    borderTopWidth: 1,
+    bottom: isSmallScreen ? 70 : 74,
     left: 0,
-    paddingHorizontal: isSmallScreen ? 12 : 16,
-    paddingTop: isSmallScreen ? 8 : 12,
-    paddingBottom: isSmallScreen ? 12 : 16,
+    position: 'absolute',
+    right: 0,
+    paddingTop: 8,
+    paddingBottom: 8,
+    paddingHorizontal: 12,
+  },
+  bottomTabBar: {
+    alignItems: 'center',
+    backgroundColor: theme.surfaceStrong,
+    borderColor: theme.border,
+    borderTopWidth: 1,
+    bottom: 0,
+    flexDirection: 'row',
+    gap: 4,
+    justifyContent: 'space-around',
+    left: 0,
+    paddingBottom: 8,
+    paddingHorizontal: 8,
+    paddingTop: 8,
     position: 'absolute',
     right: 0,
   },
-  nowTrack: {
+  bottomTabIndicator: {
+    backgroundColor: theme.surfaceSoft,
+    borderColor: theme.borderStrong,
+    borderRadius: 8,
+    borderWidth: 1,
+    bottom: 8,
+    left: 8,
+    position: 'absolute',
+    top: 8,
+  },
+  bottomTab: {
+    alignItems: 'center',
+    borderColor: 'transparent',
+    borderRadius: 8,
+    borderWidth: 1,
+    flex: 1,
+    gap: 3,
+    justifyContent: 'center',
+    minHeight: 54,
+    zIndex: 1,
+  },
+  bottomTabActive: {
+    borderColor: 'transparent',
+  },
+  bottomTabLabel: {
+    color: theme.muted,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  bottomTabLabelActive: {
+    color: theme.accent,
+  },
+  miniPlayerPressable: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: isSmallScreen ? 8 : 10,
+    gap: 12,
+    justifyContent: 'space-between',
+  },
+  miniTrackMeta: {
+    flex: 1,
+    justifyContent: 'center',
   },
   nowTitle: {
     color: theme.text,
     fontSize: isSmallScreen ? 13 : 15,
     fontWeight: '900',
+  },
+  miniTransportRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 16,
+  },
+  miniButton: {
+    padding: 4,
+  },
+  miniProgressTrack: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: theme.surfaceSoft,
+  },
+  miniProgressFill: {
+    height: '100%',
+    backgroundColor: theme.secondary,
   },
   transportRow: {
     alignItems: 'center',

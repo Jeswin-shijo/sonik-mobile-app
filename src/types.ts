@@ -2,13 +2,13 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { ComponentProps } from 'react';
 
 export type AuthView = 'login' | 'register-otp' | 'forgot-otp';
-export type ActivePanel = 'flow' | 'library' | 'profile';
+export type ActivePanel = 'flow' | 'search' | 'library' | 'profile';
 export type RepeatMode = 'off' | 'one';
 export type CoverClass = 'neon' | 'coast' | 'velvet' | 'summer' | 'blue';
 export type IconName = ComponentProps<typeof Ionicons>['name'];
 export type ThemeMode = 'dark' | 'light';
 
-export type UserRole = 'user' | 'admin';
+export type UserRole = 'user';
 
 export type SessionUser = {
   id: number;
@@ -17,6 +17,9 @@ export type SessionUser = {
   authProvider: 'local' | 'google' | 'hybrid';
   role: UserRole;
   googleConnected: boolean;
+  birthday?: string | null;
+  language?: string;
+  avatarUrl?: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -57,6 +60,8 @@ export type MusicTrack = {
   coverUrl?: string | null;
   audio?: number;
   streamUrl?: string;
+  singerId?: string;
+  lyricistId?: string;
 };
 
 export type Playlist = {
@@ -72,6 +77,22 @@ export type Artist = {
   name: string;
   trackCount: number;
   albumCount: number;
+  tracks: MusicTrack[];
+};
+
+export type Singer = {
+  id: string;
+  name: string;
+  imageName: string | null;
+  trackCount: number;
+  tracks: MusicTrack[];
+};
+
+export type Lyricist = {
+  id: string;
+  name: string;
+  imageName: string | null;
+  trackCount: number;
   tracks: MusicTrack[];
 };
 
@@ -95,6 +116,14 @@ export type ApiTrack = Omit<MusicTrack, 'coverClass' | 'audio' | 'durationMs'> &
 };
 
 export type ApiArtist = Omit<Artist, 'tracks'> & {
+  tracks: ApiTrack[];
+};
+
+export type ApiSinger = Omit<Singer, 'tracks'> & {
+  tracks: ApiTrack[];
+};
+
+export type ApiLyricist = Omit<Lyricist, 'tracks'> & {
   tracks: ApiTrack[];
 };
 

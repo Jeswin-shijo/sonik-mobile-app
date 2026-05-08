@@ -1,16 +1,27 @@
+import { apiBaseUrl } from '../config';
 import type {
   Album,
   ApiAlbum,
   ApiArtist,
+  ApiLyricist,
   ApiPlaylist,
   ApiQueueItem,
+  ApiSinger,
   ApiTrack,
   Artist,
   CoverClass,
+  Lyricist,
   MusicTrack,
   Playlist,
   QueueItem,
+  Singer,
 } from '../types';
+
+export function resolveAvatarUrl(avatarUrl: string | null | undefined): string | null {
+  if (!avatarUrl) return null;
+  if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) return avatarUrl;
+  return `${apiBaseUrl}/uploads/avatars/${avatarUrl}`;
+}
 
 export function normalizeCoverClass(coverClass: string): CoverClass {
   const normalized = coverClass.replace(/^cover-/, '');
@@ -56,6 +67,20 @@ export function normalizeAlbum(album: ApiAlbum): Album {
   return {
     ...album,
     tracks: album.tracks.map(normalizeTrack),
+  };
+}
+
+export function normalizeSinger(singer: ApiSinger): Singer {
+  return {
+    ...singer,
+    tracks: (singer.tracks ?? []).map(normalizeTrack),
+  };
+}
+
+export function normalizeLyricist(lyricist: ApiLyricist): Lyricist {
+  return {
+    ...lyricist,
+    tracks: (lyricist.tracks ?? []).map(normalizeTrack),
   };
 }
 

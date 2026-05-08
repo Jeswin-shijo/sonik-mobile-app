@@ -61,7 +61,9 @@ export type MusicTrack = {
   audio?: number;
   streamUrl?: string;
   singerId?: string;
+  artistId?: string;
   lyricistId?: string;
+  genre?: string;
 };
 
 export type Playlist = {
@@ -171,3 +173,6 @@ export type ApiPlaylist = {
   trackCount: number;
   tracks: ApiTrack[];
 };
+
+export type DetailEntityKind = 'artist' | 'album' | 'singer' | 'lyricist';
+export type DetailEntity = { kind: DetailEntityKind; id: string };

@@ -6,6 +6,7 @@ export type AppTheme = {
   surface: string;
   surfaceStrong: string;
   surfaceSoft: string;
+  card: string;
   field: string;
   text: string;
   muted: string;
@@ -26,6 +27,7 @@ export const appThemes: Record<ThemeMode, AppTheme> = {
     surface: 'rgba(29,23,35,0.86)',
     surfaceStrong: 'rgba(16,18,24,0.9)',
     surfaceSoft: 'rgba(248,244,236,0.06)',
+    card: '#1d1723',
     field: 'rgba(7,12,18,0.72)',
     text: '#fbf7ef',
     muted: '#b8afaa',
@@ -44,6 +46,7 @@ export const appThemes: Record<ThemeMode, AppTheme> = {
     surface: 'rgba(255,252,247,0.92)',
     surfaceStrong: 'rgba(255,255,255,0.95)',
     surfaceSoft: 'rgba(26,20,16,0.055)',
+    card: '#ffffff',
     field: 'rgba(255,255,255,0.88)',
     text: '#17120f',
     muted: '#6d625a',

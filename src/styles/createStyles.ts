@@ -451,8 +451,8 @@ export const createStyles = (theme: AppTheme) =>
     },
     trackRow: {
       alignItems: 'center',
-      backgroundColor: theme.surfaceSoft,
-      borderColor: theme.surfaceSoft,
+      backgroundColor: theme.card,
+      borderColor: theme.border,
       borderRadius: 8,
       borderWidth: 1,
       flexDirection: 'row',
@@ -461,8 +461,8 @@ export const createStyles = (theme: AppTheme) =>
       paddingHorizontal: isSmallScreen ? 8 : 10,
     },
     trackRowActive: {
-      backgroundColor: 'rgba(85,214,194,0.12)',
-      borderColor: 'rgba(85,214,194,0.26)',
+      backgroundColor: theme.mode === 'dark' ? '#1f2d2b' : '#e6f7f5',
+      borderColor: theme.secondary,
     },
     trackNumber: {
       color: theme.muted,

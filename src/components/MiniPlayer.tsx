@@ -1,6 +1,4 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { BlurView } from 'expo-blur';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { TrackArt } from './TrackArt';
 import { PlayingBars } from './PlayingBars';
@@ -9,7 +7,6 @@ import { useAppContext } from '../context/AppContext';
 export function MiniPlayer() {
   const {
     theme,
-    themeMode,
     selectedTrack,
     isPlaying,
     progress,
@@ -33,25 +30,10 @@ export function MiniPlayer() {
       ref={miniPlayerRef}
       style={[styles.root, { transform: [{ translateY: miniPlayerDragY }] }]}
     >
-      {/* Frosted glass background */}
-      <BlurView
-        intensity={72}
-        tint={themeMode === 'dark' ? 'dark' : 'light'}
-        style={StyleSheet.absoluteFillObject}
-      />
-      {/* Accent gradient overlay */}
-      <LinearGradient
-        colors={[
-          themeMode === 'dark' ? 'rgba(85,214,194,0.08)' : 'rgba(85,214,194,0.12)',
-          'transparent',
-        ]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 0 }}
-        style={StyleSheet.absoluteFillObject}
-      />
+      <View style={[StyleSheet.absoluteFillObject, { backgroundColor: theme.card }]} />
 
       {/* Thin progress bar at top */}
-      <View style={styles.progressTrack}>
+      <View style={[styles.progressTrack, { backgroundColor: theme.border }]}>
         <View
           style={[
             styles.progressFill,
@@ -148,7 +130,6 @@ const styles = StyleSheet.create({
   },
   progressTrack: {
     height: 2.5,
-    backgroundColor: 'rgba(128,128,128,0.2)',
   },
   progressFill: {
     height: '100%',

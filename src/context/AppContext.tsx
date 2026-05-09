@@ -19,7 +19,7 @@ import {
   useState,
 } from 'react';
 import { Animated, AppState, Easing, PanResponder, Share, useColorScheme } from 'react-native';
-import { getFriendlyError, requestJson } from '../api/client';
+import { ApiRequestError, getFriendlyError, requestJson } from '../api/client';
 import {
   apiBaseUrl,
   googleAndroidClientId,
@@ -1320,6 +1320,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   async function persistSession(nextSession: SessionState) {
     await AsyncStorage.setItem(sessionStorageKey, JSON.stringify(nextSession));
     setSession(nextSession);
+    setLoginForm({ email: '', password: '' });
+    setRegisterForm({ profileName: '', email: '', password: '', confirmPassword: '' });
+    setResetForm({ newPassword: '' });
+    setOtpForm({ email: '', otp: '' });
+    setPasswordForm({ currentPassword: '', newPassword: '' });
   }
 
   async function handleLogin() {
@@ -1447,16 +1452,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setIsSubmitting(true);
     clearFeedback();
     try {
-      const response = await fetch(`${apiBaseUrl}/auth/change-password`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.accessToken}` },
+      await requestJson('/auth/change-password', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${session.accessToken}` },
         body: JSON.stringify(passwordForm),
       });
-      if (!response.ok) throw new Error('Could not change password');
       setNoticeMessage('Password changed successfully.');
       setPasswordForm({ currentPassword: '', newPassword: '' });
     } catch (error) {
-      handleApiError(error);
+      if (error instanceof ApiRequestError && error.status === 401) {
+        setErrorMessage('Current password is incorrect.');
+      } else {
+        handleApiError(error);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -1548,7 +1556,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelectedPlaylistId('library');
     setView('login');
     setActivePanel('flow');
+    setLoginForm({ email: '', password: '' });
+    setRegisterForm({ profileName: '', email: '', password: '', confirmPassword: '' });
     setResetForm({ newPassword: '' });
+    setOtpForm({ email: '', otp: '' });
+    setProfileForm({ profileName: '', birthday: '', language: 'en' });
+    setPasswordForm({ currentPassword: '', newPassword: '' });
     clearFeedback();
   }
 
@@ -1770,6 +1783,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }, 400);
     return () => clearTimeout(searchTimerRef.current);
   }, [searchQuery, activePanel, session?.accessToken]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!isSettingsOpen) {
+      setPasswordForm({ currentPassword: '', newPassword: '' });
+    }
+  }, [isSettingsOpen]);
+
+  useEffect(() => {
+    setPasswordForm({ currentPassword: '', newPassword: '' });
+  }, [view]);
 
   useEffect(() => {
     if (view !== 'register-otp' || otpStep !== 'email') return;

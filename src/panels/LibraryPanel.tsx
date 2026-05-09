@@ -1,6 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { LibraryCollectionCard } from '../components/LibraryCollectionCard';
+import { PlayingBars } from '../components/PlayingBars';
 import { TrackArt } from '../components/TrackArt';
 import { apiBaseUrl } from '../config';
 import { useAppContext } from '../context/AppContext';
@@ -18,6 +19,7 @@ export function LibraryPanel() {
     lyricists,
     playlists,
     selectedTrackId,
+    isPlaying,
     durationByTrackId,
     t,
     openTrackDetail,
@@ -63,7 +65,10 @@ export function LibraryPanel() {
                 <Text style={styles.trackName} numberOfLines={1}>{track.title}</Text>
                 <Text style={styles.trackSubtext} numberOfLines={1}>{track.artist} - {track.album}</Text>
               </View>
-              <Text style={styles.trackDuration}>{durationByTrackId[track.id] ?? track.duration}</Text>
+              {track.id === selectedTrackId && isPlaying
+                ? <PlayingBars color={theme.accent} size={14} />
+                : <Text style={styles.trackDuration}>{durationByTrackId[track.id] ?? track.duration}</Text>
+              }
             </Pressable>
           ))
         ) : (
@@ -93,7 +98,10 @@ export function LibraryPanel() {
                 <Text style={styles.trackName} numberOfLines={1}>{track.title}</Text>
                 <Text style={styles.trackSubtext} numberOfLines={1}>{track.artist} - {track.album}</Text>
               </View>
-              <Text style={styles.trackDuration}>{durationByTrackId[track.id] ?? track.duration}</Text>
+              {track.id === selectedTrackId && isPlaying
+                ? <PlayingBars color={theme.accent} size={14} />
+                : <Text style={styles.trackDuration}>{durationByTrackId[track.id] ?? track.duration}</Text>
+              }
             </Pressable>
           ))
         ) : (

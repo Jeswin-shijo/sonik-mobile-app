@@ -2,6 +2,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Animated, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { LibraryCollectionCard } from '../components/LibraryCollectionCard';
+import { PlayingBars } from '../components/PlayingBars';
 import { TrackArt } from '../components/TrackArt';
 import { useAppContext } from '../context/AppContext';
 
@@ -45,7 +46,10 @@ export function FlowPanel() {
       <View style={styles.signalDeck}>
         <TrackArt track={selectedTrack} size="large" />
         <View style={styles.deckCopy}>
-          <Text style={styles.eyebrow}>Playing from {selectedSourceLabel}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <Text style={styles.eyebrow}>Playing from {selectedSourceLabel}</Text>
+            {isPlaying && <PlayingBars color={theme.accent} size={12} />}
+          </View>
           <Text style={styles.trackTitle}>{selectedTrack.title}</Text>
           <Text style={styles.trackArtist}>
             {selectedTrack.artist} - {selectedTrack.album}
@@ -103,6 +107,7 @@ export function FlowPanel() {
               <LibraryCollectionCard
                 artwork={{ kind: 'track', track }}
                 colors={theme}
+                isPlaying={track.id === selectedTrackId && isPlaying}
                 key={`recent-flow-${track.id}-${index}`}
                 onPress={() => openTrackDetail(track.id)}
                 subtitle={track.artist}
@@ -235,9 +240,15 @@ export function FlowPanel() {
               onPress={() => openTrackDetail(track.id)}
               style={[styles.trackRow, isSelected ? styles.trackRowActive : null]}
             >
-              <Text style={[styles.trackNumber, isSelected ? styles.trackNumberActive : null]}>
-                {isSelected && isPlaying ? '|||' : index + 1}
-              </Text>
+              {isSelected && isPlaying ? (
+                <View style={{ width: 28, alignItems: 'center', justifyContent: 'center' }}>
+                  <PlayingBars color={theme.secondary} size={14} />
+                </View>
+              ) : (
+                <Text style={[styles.trackNumber, isSelected ? styles.trackNumberActive : null]}>
+                  {index + 1}
+                </Text>
+              )}
               <TrackArt track={track} size="small" />
               <View style={styles.trackMeta}>
                 <Text style={styles.trackName} numberOfLines={1}>{track.title}</Text>

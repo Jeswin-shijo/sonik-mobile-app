@@ -5,6 +5,7 @@ import { Animated, Modal, Pressable, ScrollView, StyleSheet, Text, View } from '
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { IconButton } from './IconButton';
 import { TrackArt } from './TrackArt';
+import { WaveformScrubber } from './WaveformScrubber';
 import { useAppContext } from '../context/AppContext';
 import { formatMillis } from '../utils/music';
 
@@ -23,8 +24,6 @@ export function TrackDetail() {
     repeatMode,
     progress,
     soundPosition,
-    progressTrackWidth,
-    setProgressTrackWidth,
     isSelectedTrackLiked,
     isSelectedTrackInDetailTarget,
     isPlaylistPickerOpen,
@@ -95,10 +94,6 @@ export function TrackDetail() {
           ]}
         />
         <Animated.View
-          onTouchCancel={handleDetailTouchCancel}
-          onTouchEnd={handleDetailTouchEnd}
-          onTouchMove={handleDetailTouchMove}
-          onTouchStart={handleDetailTouchStart}
           style={{ flex: 1, opacity: playerSheetOpacity, transform: [{ translateY: playerSheetY }] }}
         >
           <View pointerEvents="none" style={styles.detailBackgroundSolid} />
@@ -121,6 +116,13 @@ export function TrackDetail() {
           </Animated.View>
 
           <SafeAreaView style={styles.detailScreen}>
+            <View
+              onTouchCancel={handleDetailTouchCancel}
+              onTouchEnd={handleDetailTouchEnd}
+              onTouchMove={handleDetailTouchMove}
+              onTouchStart={handleDetailTouchStart}
+              style={{ flex: 1 }}
+            >
             <View style={styles.detailHeader}>
               <Pressable
                 accessibilityLabel="Close track details"
@@ -182,18 +184,22 @@ export function TrackDetail() {
                 <Text style={styles.chip}>{selectedRuntimeLabel}</Text>
               </View>
             </Animated.View>
+            </View>
 
             <View style={styles.detailFooter}>
               <View style={styles.progressMeta}>
                 <Text style={styles.progressText}>{formatMillis(soundPosition)}</Text>
-                <Pressable
-                  accessibilityLabel="Seek track"
-                  onLayout={(e) => setProgressTrackWidth(e.nativeEvent.layout.width)}
-                  onPress={(e) => void seekToRatio(e.nativeEvent.locationX / progressTrackWidth)}
-                  style={styles.progressTrack}
-                >
-                  <View style={[styles.progressFill, { width: `${progress}%` as `${number}%` }]} />
-                </Pressable>
+                <WaveformScrubber
+                  trackId={selectedTrack.id}
+                  progress={progress}
+                  onSeek={(ratio) => {
+                    void seekToRatio(ratio);
+                    if (ratio >= 0.99 && isPlaying) togglePlayback();
+                  }}
+                  accentColor={theme.accent}
+                  dimColor={theme.muted}
+                  style={{ flex: 1 }}
+                />
                 <Text style={styles.progressText}>{selectedRuntimeLabel}</Text>
               </View>
 

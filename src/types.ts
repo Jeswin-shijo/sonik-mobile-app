@@ -1,7 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { ComponentProps } from 'react';
 
-export type AuthView = 'login' | 'register-otp' | 'forgot-otp';
+export type AuthView = 'landing' | 'login' | 'register-otp' | 'forgot-otp';
 export type ActivePanel = 'flow' | 'search' | 'library' | 'profile';
 export type RepeatMode = 'off' | 'one';
 export type CoverClass = 'neon' | 'coast' | 'velvet' | 'summer' | 'blue';

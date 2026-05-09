@@ -1,6 +1,7 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { IconName, MusicTrack } from '../types';
+import { PlayingBars } from './PlayingBars';
 import { TrackArt } from './TrackArt';
 
 type CollectionColors = {
@@ -39,12 +40,14 @@ type Artwork =
 export function LibraryCollectionCard({
   artwork,
   colors,
+  isPlaying = false,
   onPress,
   subtitle,
   title,
 }: {
   artwork: Artwork;
   colors: CollectionColors;
+  isPlaying?: boolean;
   onPress: () => void;
   subtitle: string;
   title: string;
@@ -56,11 +59,14 @@ export function LibraryCollectionCard({
         styles.card,
         {
           backgroundColor: colors.surfaceSoft,
-          borderColor: colors.border,
+          borderColor: isPlaying ? colors.accent : colors.border,
         },
       ]}
     >
-      <View>{renderArtwork(artwork, colors)}</View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        {renderArtwork(artwork, colors)}
+        {isPlaying && <PlayingBars color={colors.accent} size={16} />}
+      </View>
       <View>
         <Text
           numberOfLines={2}

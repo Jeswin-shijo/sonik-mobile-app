@@ -1,10 +1,12 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { StatusBar } from 'expo-status-bar';
-import { Image, Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { useState } from 'react';
+import { Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { languageOptions } from '../constants/languages';
 import { useAppContext } from '../context/AppContext';
 import { resolveAvatarUrl } from '../utils/music';
+import { DatePickerModal } from '../components/DatePickerModal';
 
 export function SettingsScreen() {
   const {
@@ -29,6 +31,8 @@ export function SettingsScreen() {
     handleUploadAvatar,
     t,
   } = useAppContext();
+
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   if (!session) return null;
 
@@ -101,12 +105,29 @@ export function SettingsScreen() {
           />
 
           <Text style={styles.fieldLabel}>{t('birthday')}</Text>
-          <TextInput
-            onChangeText={(text) => setProfileForm({ ...profileForm, birthday: text })}
-            placeholder="YYYY-MM-DD"
-            placeholderTextColor={theme.muted}
-            style={styles.spotifyInput}
+          <Pressable
+            onPress={() => setShowDatePicker(true)}
+            style={[styles.spotifyInput, datePickerStyles.trigger]}
+          >
+            <Ionicons color={theme.muted} name="calendar-outline" size={16} />
+            <Text style={profileForm.birthday ? { color: theme.text } : { color: theme.muted }}>
+              {profileForm.birthday || 'Select date'}
+            </Text>
+          </Pressable>
+
+          <DatePickerModal
+            visible={showDatePicker}
             value={profileForm.birthday}
+            onConfirm={(iso) => {
+              setProfileForm({ ...profileForm, birthday: iso });
+              setShowDatePicker(false);
+            }}
+            onDismiss={() => setShowDatePicker(false)}
+            accentColor={theme.accent}
+            textColor={theme.text}
+            mutedColor={theme.muted}
+            backgroundColor={theme.background}
+            borderColor={theme.border}
           />
 
           <Text style={styles.fieldLabel}>{t('language')}</Text>
@@ -247,3 +268,11 @@ export function SettingsScreen() {
     </SafeAreaView>
   );
 }
+
+const datePickerStyles = StyleSheet.create({
+  trigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+});

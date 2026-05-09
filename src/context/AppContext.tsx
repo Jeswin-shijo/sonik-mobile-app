@@ -18,7 +18,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Animated, Easing, PanResponder, Share, useColorScheme } from 'react-native';
+import { Animated, AppState, Easing, PanResponder, Share, useColorScheme } from 'react-native';
 import { getFriendlyError, requestJson } from '../api/client';
 import {
   apiBaseUrl,
@@ -306,7 +306,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [themeMode, setThemeMode] = useState<ThemeMode>(
     systemColorScheme === 'light' ? 'light' : 'dark',
   );
-  const [view, setView] = useState<AuthView>('login');
+  const [view, setView] = useState<AuthView>('landing');
   const [activePanel, setActivePanel] = useState<ActivePanel>('flow');
   const [session, setSession] = useState<SessionState | null>(null);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
@@ -1646,6 +1646,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!session) return;
     void refreshPersonalLibrary(session);
+  }, [session]);
+
+  useEffect(() => {
+    if (!session) return;
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        void refreshPersonalLibrary(session);
+      }
+    });
+    return () => sub.remove();
   }, [session]);
 
   useEffect(() => {

@@ -64,6 +64,7 @@ export type MusicTrack = {
   artistId?: string;
   lyricistId?: string;
   genre?: string;
+  language?: string;
 };
 
 export type Playlist = {
@@ -106,6 +107,13 @@ export type Album = {
   tracks: MusicTrack[];
 };
 
+export type Language = {
+  id: string;
+  name: string;
+  trackCount: number;
+  tracks: MusicTrack[];
+};
+
 export type QueueItem = {
   id: string;
   position: number;
@@ -133,6 +141,10 @@ export type ApiAlbum = Omit<Album, 'tracks'> & {
   tracks: ApiTrack[];
 };
 
+export type ApiLanguage = Omit<Language, 'tracks'> & {
+  tracks: ApiTrack[];
+};
+
 export type ApiQueueItem = Omit<QueueItem, 'track'> & {
   track: ApiTrack;
 };
@@ -147,6 +159,10 @@ export type ArtistsResponse = {
 
 export type AlbumsResponse = {
   albums: ApiAlbum[];
+};
+
+export type LanguagesResponse = {
+  languages: ApiLanguage[];
 };
 
 export type PlaylistsResponse = {
@@ -174,5 +190,5 @@ export type ApiPlaylist = {
   tracks: ApiTrack[];
 };
 
-export type DetailEntityKind = 'artist' | 'album' | 'singer' | 'lyricist';
+export type DetailEntityKind = 'artist' | 'album' | 'singer' | 'lyricist' | 'language';
 export type DetailEntity = { kind: DetailEntityKind; id: string };

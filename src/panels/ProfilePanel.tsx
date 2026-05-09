@@ -1,6 +1,6 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRef, useState } from 'react';
-import { Image, Pressable, Text, TextInput, View } from 'react-native';
+import { Image, Modal, Pressable, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { TrackArt } from '../components/TrackArt';
 import { useAppContext } from '../context/AppContext';
 import { resolveAvatarUrl } from '../utils/music';
@@ -28,6 +28,7 @@ export function ProfilePanel() {
     handleUploadAvatar,
   } = useAppContext();
 
+  const [previewVisible, setPreviewVisible] = useState(false);
   const [editingPlaylistId, setEditingPlaylistId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const editInputRef = useRef<TextInput>(null);
@@ -53,23 +54,48 @@ export function ProfilePanel() {
           <Ionicons color={theme.text} name="settings-outline" size={24} />
         </Pressable>
 
-        <Pressable
-          onPress={() => void handleUploadAvatar()}
-          style={({ pressed }) => [styles.spotifyAvatarContainer, pressed && { opacity: 0.8 }]}
-        >
-          {resolveAvatarUrl(session.user.avatarUrl) ? (
-            <Image source={{ uri: resolveAvatarUrl(session.user.avatarUrl)! }} style={styles.spotifyAvatarLarge} />
-          ) : (
-            <View style={[styles.spotifyAvatarLarge, styles.spotifyAvatarPlaceholder]}>
-              <Text style={styles.spotifyAvatarInitial}>
-                {session.user.profileName.charAt(0).toUpperCase()}
-              </Text>
-            </View>
-          )}
-          <View style={styles.profileCameraBadge}>
+        <View style={styles.spotifyAvatarContainer}>
+          <Pressable
+            onPress={() => resolveAvatarUrl(session.user.avatarUrl) && setPreviewVisible(true)}
+            style={({ pressed }) => [pressed && { opacity: 0.85 }]}
+          >
+            {resolveAvatarUrl(session.user.avatarUrl) ? (
+              <Image source={{ uri: resolveAvatarUrl(session.user.avatarUrl)! }} style={styles.spotifyAvatarLarge} />
+            ) : (
+              <View style={[styles.spotifyAvatarLarge, styles.spotifyAvatarPlaceholder]}>
+                <Text style={styles.spotifyAvatarInitial}>
+                  {session.user.profileName.charAt(0).toUpperCase()}
+                </Text>
+              </View>
+            )}
+          </Pressable>
+          <Pressable
+            onPress={() => void handleUploadAvatar()}
+            style={({ pressed }) => [styles.profileCameraBadge, pressed && { opacity: 0.75 }]}
+          >
             <Ionicons name="camera" size={16} color="#fff" />
-          </View>
-        </Pressable>
+          </Pressable>
+        </View>
+
+        {/* Avatar preview modal */}
+        <Modal visible={previewVisible} transparent animationType="fade" statusBarTranslucent>
+          <Pressable
+            style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.88)', justifyContent: 'center', alignItems: 'center' }}
+            onPress={() => setPreviewVisible(false)}
+          >
+            <Image
+              source={{ uri: resolveAvatarUrl(session.user.avatarUrl)! }}
+              style={{ width: 300, height: 300, borderRadius: 150 }}
+              resizeMode="cover"
+            />
+            <TouchableOpacity
+              style={{ position: 'absolute', top: 56, right: 20, padding: 8 }}
+              onPress={() => setPreviewVisible(false)}
+            >
+              <Ionicons name="close" size={28} color="#fff" />
+            </TouchableOpacity>
+          </Pressable>
+        </Modal>
 
         <Text style={styles.spotifyName}>{session.user.profileName}</Text>
         <Text style={styles.spotifyStatsInline}>

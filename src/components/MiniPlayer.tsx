@@ -10,17 +10,14 @@ export function MiniPlayer() {
     selectedTrack,
     isPlaying,
     progress,
-    isSelectedTrackLiked,
-    likedPulseTrackId,
-    likeScaleAnim,
     miniPlayerDragY,
     miniPlayerRef,
     miniPlayerPanResponder,
     openPlayerSheetFromMiniPlayer,
     handleMiniPlayerLayout,
     selectNextTrack,
+    selectPreviousTrack,
     togglePlayback,
-    handleLikePress,
   } = useAppContext();
 
   return (
@@ -66,23 +63,13 @@ export function MiniPlayer() {
 
         {/* Controls */}
         <View style={styles.controls}>
-          {/* Like */}
+          {/* Previous */}
           <Pressable
-            onPress={(e) => { e.stopPropagation(); handleLikePress(selectedTrack.id); }}
+            onPress={(e) => { e.stopPropagation(); selectPreviousTrack(); }}
             hitSlop={10}
             style={styles.controlBtn}
           >
-            <Animated.View
-              style={likedPulseTrackId === selectedTrack.id
-                ? { transform: [{ scale: likeScaleAnim }] }
-                : undefined}
-            >
-              <Ionicons
-                name={isSelectedTrackLiked ? 'heart' : 'heart-outline'}
-                size={20}
-                color={isSelectedTrackLiked ? '#ff7a59' : theme.muted}
-              />
-            </Animated.View>
+            <Ionicons name="play-skip-back" size={20} color={theme.text} />
           </Pressable>
 
           {/* Play / Pause */}

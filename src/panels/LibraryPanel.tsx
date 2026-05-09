@@ -5,8 +5,12 @@ import { PlayingBars } from '../components/PlayingBars';
 import { TrackArt } from '../components/TrackArt';
 import { apiBaseUrl } from '../config';
 import { useAppContext } from '../context/AppContext';
+import { useIsOnline } from '../hooks/useIsOnline';
+import { DownloadsPanel } from './DownloadsPanel';
 
 export function LibraryPanel() {
+  const isOnline = useIsOnline();
+
   const {
     theme,
     styles,
@@ -15,6 +19,7 @@ export function LibraryPanel() {
     recentTracks,
     artists,
     albums,
+    languages,
     singers,
     lyricists,
     playlists,
@@ -26,11 +31,16 @@ export function LibraryPanel() {
     openTrackActionSheet,
     selectArtist,
     selectAlbum,
+    selectLanguage,
     selectSinger,
     selectLyricist,
     setSelectedPlaylistId,
     setActivePanel,
   } = useAppContext();
+
+  if (!isOnline) {
+    return <DownloadsPanel />;
+  }
 
   return (
     <>
@@ -41,7 +51,7 @@ export function LibraryPanel() {
         <View style={styles.libraryOverviewCopy}>
           <Text style={styles.libraryOverviewTitle}>Your Library</Text>
           <Text style={styles.libraryOverviewMeta}>
-            {libraryTracks.length} tracks · {artists.length} artists · {albums.length} albums
+            {libraryTracks.length} tracks · {artists.length} artists · {albums.length} albums · {languages.length} languages
           </Text>
         </View>
       </View>
@@ -155,6 +165,34 @@ export function LibraryPanel() {
           );
         })}
       </ScrollView>
+
+      {languages.length > 0 && (
+        <>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Languages</Text>
+            <Text style={styles.sectionAction}>{languages.length} languages</Text>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.collectionScroller}>
+            {languages.map((lang) => {
+              const sampleTrack = lang.tracks[0];
+              return (
+                <LibraryCollectionCard
+                  artwork={
+                    sampleTrack
+                      ? { kind: 'track', track: sampleTrack }
+                      : { kind: 'icon', icon: 'globe', color: theme.accent, backgroundColor: 'rgba(245,193,93,0.12)' }
+                  }
+                  colors={theme}
+                  key={`language-${lang.id}`}
+                  onPress={() => selectLanguage(lang.id)}
+                  subtitle={`Language · ${lang.trackCount} tracks`}
+                  title={lang.name}
+                />
+              );
+            })}
+          </ScrollView>
+        </>
+      )}
 
       {singers.length > 0 && (
         <>

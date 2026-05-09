@@ -1,4 +1,4 @@
-import type { Album, Artist, MusicTrack } from '../types';
+import type { Album, Artist, Language, MusicTrack } from '../types';
 
 export function buildArtistsFromTracks(tracks: MusicTrack[]): Artist[] {
   const artistsByName = new Map<string, MusicTrack[]>();
@@ -16,6 +16,26 @@ export function buildArtistsFromTracks(tracks: MusicTrack[]): Artist[] {
       trackCount: artistTracks.length,
       albumCount: new Set(artistTracks.map((track) => track.album)).size,
       tracks: artistTracks,
+    }))
+    .sort((first, second) => first.name.localeCompare(second.name));
+}
+
+export function buildLanguagesFromTracks(tracks: MusicTrack[]): Language[] {
+  const byLanguage = new Map<string, MusicTrack[]>();
+
+  tracks.forEach((track) => {
+    if (!track.language?.trim()) return;
+    const langTracks = byLanguage.get(track.language) ?? [];
+    langTracks.push(track);
+    byLanguage.set(track.language, langTracks);
+  });
+
+  return [...byLanguage.entries()]
+    .map(([name, langTracks], index) => ({
+      id: `lang-${index}-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+      name,
+      trackCount: langTracks.length,
+      tracks: langTracks,
     }))
     .sort((first, second) => first.name.localeCompare(second.name));
 }

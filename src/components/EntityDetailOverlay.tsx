@@ -15,6 +15,7 @@ export function EntityDetailOverlay() {
     detailEntity,
     artists,
     albums,
+    languages,
     singers,
     lyricists,
     favoriteTracks,
@@ -81,6 +82,17 @@ export function EntityDetailOverlay() {
       }
       break;
     }
+    case 'language': {
+      const entity = languages.find((l) => l.id === detailEntity.id);
+      if (entity) {
+        name = entity.name;
+        subtitle = `${entity.trackCount} ${entity.trackCount === 1 ? 'track' : 'tracks'}`;
+        tracks = entity.tracks;
+        const coverTrack = entity.tracks[0];
+        if (coverTrack?.coverUrl) imageUri = coverTrack.coverUrl.startsWith('http') ? coverTrack.coverUrl : `${apiBaseUrl}${coverTrack.coverUrl}`;
+      }
+      break;
+    }
   }
 
   const kindIcon: Record<string, string> = {
@@ -88,6 +100,7 @@ export function EntityDetailOverlay() {
     album: 'albums',
     singer: 'person',
     lyricist: 'create',
+    language: 'globe',
   };
 
   return (

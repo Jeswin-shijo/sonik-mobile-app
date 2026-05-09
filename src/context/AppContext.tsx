@@ -1,6 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Google from 'expo-auth-session/providers/google';
-import * as DocumentPicker from 'expo-document-picker';
+import { io, Socket } from 'socket.io-client';
+import * as ImagePicker from 'expo-image-picker';
+import { AvatarCropModal } from '../components/AvatarCropModal';
 import {
   createAudioPlayer,
   setAudioModeAsync,
@@ -33,6 +35,7 @@ import type {
   ActivePanel,
   Album,
   AlbumsResponse,
+  ApiLanguage,
   ApiLyricist,
   ApiSinger,
   Artist,
@@ -42,6 +45,8 @@ import type {
   DetailEntity,
   DetailEntityKind,
   ForgotPasswordResponse,
+  Language,
+  LanguagesResponse,
   Lyricist,
   MusicTrack,
   Playlist,
@@ -57,12 +62,13 @@ import type {
   ThemeMode,
   TracksResponse,
 } from '../types';
-import { buildAlbumsFromTracks, buildArtistsFromTracks } from '../utils/library';
+import { buildAlbumsFromTracks, buildArtistsFromTracks, buildLanguagesFromTracks } from '../utils/library';
 import {
   formatMillis,
   getRuntimeLabel,
   normalizeAlbum,
   normalizeArtist,
+  normalizeLanguage,
   normalizeLyricist,
   normalizePlaylist,
   normalizeQueueItem,
@@ -77,6 +83,7 @@ import { bottomTabs } from '../constants/navigation';
 WebBrowser.maybeCompleteAuthSession();
 
 const themeStorageKey = 'sonik-theme-mode';
+const downloadsStorageKey = 'sonik-downloaded-tracks';
 
 function getAudioSourceForTrack(
   track: MusicTrack,
@@ -129,6 +136,7 @@ export type AppContextValue = {
   singers: Singer[];
   lyricists: Lyricist[];
   albums: Album[];
+  languages: Language[];
   queueItems: QueueItem[];
 
   // player
@@ -266,6 +274,7 @@ export type AppContextValue = {
   selectPlaylist: (id: string) => void;
   selectArtist: (id: string) => void;
   selectAlbum: (id: string) => void;
+  selectLanguage: (id: string) => void;
   selectSinger: (id: string) => void;
   selectLyricist: (id: string) => void;
   createPlaylist: () => Promise<void>;
@@ -276,6 +285,13 @@ export type AppContextValue = {
   removeTrackFromPlaylist: (playlistId: string, trackId: string) => Promise<void>;
   enqueueTrack: (trackId: string, mode: 'next' | 'end') => Promise<void>;
   shareTrack: (track: MusicTrack) => Promise<void>;
+  downloadedTrackIds: string[];
+  downloadTrack: (trackId: string) => Promise<void>;
+
+  // realtime
+  notifications: { id: string; message: string; kind: 'info' | 'success' | 'warning' }[];
+  dismissNotification: (id: string) => void;
+
   openTrackActionSheet: (trackId: string) => void;
   closeTrackActionSheet: () => void;
   goToActionArtist: () => void;
@@ -313,6 +329,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [noticeMessage, setNoticeMessage] = useState('');
+  const [cropImage, setCropImage] = useState<{ uri: string; width: number; height: number } | null>(null);
   const [libraryTracks, setLibraryTracks] = useState<MusicTrack[]>(fallbackTracks);
   const [favoriteTracks, setFavoriteTracks] = useState<MusicTrack[]>([]);
   const [recentTracks, setRecentTracks] = useState<MusicTrack[]>([]);
@@ -321,6 +338,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [singers, setSingers] = useState<Singer[]>([]);
   const [lyricists, setLyricists] = useState<Lyricist[]>([]);
   const [albums, setAlbums] = useState<Album[]>(buildAlbumsFromTracks(fallbackTracks));
+  const [languages, setLanguages] = useState<Language[]>([]);
   const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isTrackDetailOpen, setIsTrackDetailOpen] = useState(false);
@@ -358,6 +376,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [detailEntity, setDetailEntity] = useState<DetailEntity | null>(null);
   const [isEntityDetailOpen, setIsEntityDetailOpen] = useState(false);
   const [isQueueViewOpen, setIsQueueViewOpen] = useState(false);
+  const [downloadedTrackIds, setDownloadedTrackIds] = useState<string[]>([]);
+  const [notifications, setNotifications] = useState<{ id: string; message: string; kind: 'info' | 'success' | 'warning' }[]>([]);
+  const socketRef = useRef<Socket | null>(null);
   const [searchResults, setSearchResults] = useState<MusicTrack[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -438,6 +459,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const album = albums.find((c) => c.id === selectedPlaylistId.slice(6));
       return album?.tracks.length ? album.tracks : libraryTracks;
     }
+    if (selectedPlaylistId.startsWith('language:')) {
+      const lang = languages.find((c) => c.id === selectedPlaylistId.slice(9));
+      return lang?.tracks.length ? lang.tracks : libraryTracks;
+    }
     if (selectedPlaylistId === 'favorites') {
       return favoriteTracks.length ? favoriteTracks : libraryTracks;
     }
@@ -455,7 +480,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const playlist = playlists.find((c) => c.id === selectedPlaylistId);
     if (playlist) return playlist.tracks.length ? playlist.tracks : libraryTracks;
     return libraryTracks;
-  }, [albums, artists, favoriteTracks, libraryTracks, lyricists, playlists, recentTracks, selectedPlaylistId, singers]);
+  }, [albums, artists, favoriteTracks, languages, libraryTracks, lyricists, playlists, recentTracks, selectedPlaylistId, singers]);
 
   const visibleTracks = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -493,12 +518,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const album = albums.find((c) => c.id === selectedPlaylistId.slice(6));
       return album ? `Album: ${album.title}` : 'Album';
     }
+    if (selectedPlaylistId.startsWith('language:')) {
+      const lang = languages.find((c) => c.id === selectedPlaylistId.slice(9));
+      return lang ? `Language: ${lang.name}` : 'Language';
+    }
     if (selectedPlaylistId === 'favorites') return 'Liked Songs';
     if (selectedPlaylistId === 'recent') return 'Recent Plays';
     if (selectedPlaylistId.startsWith('mood:')) return `Mood: ${selectedPlaylistId.slice(5)}`;
     if (selectedPlaylistId.startsWith('genre:')) return `Genre: ${selectedPlaylistId.slice(6)}`;
     return selectedPlaylist?.name ?? 'Library';
-  }, [albums, artists, lyricists, selectedPlaylist, selectedPlaylistId, singers]);
+  }, [albums, artists, languages, lyricists, selectedPlaylist, selectedPlaylistId, singers]);
 
   const addTargetPlaylist = selectedPlaylist ?? playlists[0] ?? null;
   const detailAddTargetPlaylist = playlists.find((p) => p.id === addToPlaylistId) ?? playlists[0] ?? null;
@@ -995,6 +1024,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setIsEntityDetailOpen(true);
   }
 
+  function selectLanguage(languageId: string) {
+    setDetailEntity({ kind: 'language', id: languageId });
+    setIsEntityDetailOpen(true);
+  }
+
   function selectSinger(singerId: string) {
     setDetailEntity({ kind: 'singer', id: singerId });
     setIsEntityDetailOpen(true);
@@ -1018,6 +1052,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (kind === 'artist') setSelectedPlaylistId(`artist:${id}`);
     else if (kind === 'album') setSelectedPlaylistId(`album:${id}`);
     else if (kind === 'singer') setSelectedPlaylistId(`singer:${id}`);
+    else if (kind === 'language') setSelectedPlaylistId(`language:${id}`);
     else setSelectedPlaylistId(`lyricist:${id}`);
     setSearchQuery('');
     setActivePanel('flow');
@@ -1216,6 +1251,63 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   async function addCurrentTrackToPlaylist(playlistId?: string) {
     await addTrackToPlaylist(selectedTrackId, playlistId);
+  }
+
+  async function downloadTrack(trackId: string) {
+    const track = libraryTracks.find((t) => t.id === trackId) ?? currentTracks.find((t) => t.id === trackId);
+    if (!track?.streamUrl) return;
+    const FileSystem = await import('expo-file-system/legacy');
+    const fullUrl = track.streamUrl.startsWith('http') ? track.streamUrl : `${apiBaseUrl}${track.streamUrl}`;
+    const fileName = `${track.title} - ${track.artist}.ogg`.replace(/[/\\?%*:|"<>]/g, '_');
+    const dest = `${FileSystem.documentDirectory}downloads/${fileName}`;
+    await FileSystem.makeDirectoryAsync(`${FileSystem.documentDirectory}downloads`, { intermediates: true });
+    const { status } = await FileSystem.downloadAsync(fullUrl, dest);
+    if (status === 200) {
+      const updated = [...downloadedTrackIds.filter((id) => id !== trackId), trackId];
+      setDownloadedTrackIds(updated);
+      void AsyncStorage.setItem(downloadsStorageKey, JSON.stringify(updated));
+    }
+  }
+
+  useEffect(() => {
+    const socket = io(`${apiBaseUrl}/realtime`, {
+      transports: ['websocket'],
+      autoConnect: true,
+    });
+    socketRef.current = socket;
+
+    function pushNotification(message: string, kind: 'info' | 'success' | 'warning') {
+      const id = `${Date.now()}-${Math.random()}`;
+      setNotifications((c) => [...c, { id, message, kind }]);
+      setTimeout(() => setNotifications((c) => c.filter((n) => n.id !== id)), 5000);
+    }
+
+    socket.on('track:deleted', (event: { trackId: string }) => {
+      setLibraryTracks((c) => c.filter((t) => t.id !== event.trackId));
+      setFavoriteTracks((c) => c.filter((t) => t.id !== event.trackId));
+      setRecentTracks((c) => c.filter((t) => t.id !== event.trackId));
+    });
+    socket.on('track:added', (event: { track: Record<string, unknown> }) => {
+      const track = normalizeTrack(event.track as Parameters<typeof normalizeTrack>[0]);
+      setLibraryTracks((c) => uniqueTracksById([track, ...c]));
+    });
+    socket.on('track:updated', (event: { track: Record<string, unknown> }) => {
+      const track = normalizeTrack(event.track as Parameters<typeof normalizeTrack>[0]);
+      const replace = (list: MusicTrack[]) => list.map((t) => (t.id === track.id ? track : t));
+      setLibraryTracks((c) => replace(c));
+      setFavoriteTracks((c) => replace(c));
+      setRecentTracks((c) => replace(c));
+    });
+    socket.on('notification', (event: { message: string; kind: 'info' | 'success' | 'warning' }) => {
+      pushNotification(event.message, event.kind);
+    });
+
+    return () => { socket.disconnect(); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function dismissNotification(id: string) {
+    setNotifications((c) => c.filter((n) => n.id !== id));
   }
 
   function openTrackActionSheet(trackId: string) {
@@ -1498,35 +1590,53 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   async function handleUploadAvatar() {
     if (!session) return;
     try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: 'image/*',
-        copyToCacheDirectory: true,
-        multiple: false,
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        setErrorMessage('Permission to access photos is required.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        quality: 1,
       });
       if (result.canceled || !result.assets?.[0]) return;
       const asset = result.assets[0];
+      setCropImage({ uri: asset.uri, width: asset.width, height: asset.height });
+    } catch (error) {
+      handleApiError(error);
+    }
+  }
+
+  async function handleCropSave(croppedUri: string) {
+    if (!session) return;
+    setCropImage(null);
+    try {
+      const filename = `avatar-${Date.now()}.jpg`;
       const formData = new FormData();
-      formData.append('avatar', {
-        uri: asset.uri,
-        name: asset.name ?? `avatar-${Date.now()}.jpg`,
-        type: asset.mimeType ?? 'image/jpeg',
-      } as any);
+      formData.append('avatar', { uri: croppedUri, name: filename, type: 'image/jpeg' } as any);
       setIsSubmitting(true);
       clearFeedback();
-      const response = await fetch(`${apiBaseUrl}/auth/profile/avatar`, {
+      const response = await fetch(`${apiBaseUrl}/auth/avatar`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${session.accessToken}` },
         body: formData,
       });
       if (!response.ok) throw new Error('Avatar upload failed');
       const data = await response.json();
-      setSession({ ...session, user: data.user });
+      // Persist the server URL to storage for restarts, but show the local cropped URI immediately
+      await AsyncStorage.setItem(sessionStorageKey, JSON.stringify({ ...session, user: data.user }));
+      setSession({ ...session, user: { ...data.user, avatarUrl: croppedUri } });
       setNoticeMessage('Avatar updated successfully!');
     } catch (error) {
       handleApiError(error);
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  function handleCropCancel() {
+    setCropImage(null);
   }
 
   async function handleGoogleToken(idToken: string) {
@@ -1581,13 +1691,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // ─── Effects ─────────────────────────────────────────────────────────────────
 
   async function loadLibrary() {
-    const [tracksPayload, artistsPayload, singersPayload, lyricistsPayload, albumsPayload] =
+    const [tracksPayload, artistsPayload, singersPayload, lyricistsPayload, albumsPayload, languagesPayload] =
       await Promise.all([
         requestJson<TracksResponse>('/tracks'),
         requestJson<ArtistsResponse>('/tracks/artists').catch(() => null),
         requestJson<{ singers: ApiSinger[] }>('/people/singers').catch(() => null),
         requestJson<{ lyricists: ApiLyricist[] }>('/people/lyricists').catch(() => null),
         requestJson<AlbumsResponse>('/tracks/albums').catch(() => null),
+        requestJson<LanguagesResponse>('/tracks/languages').catch(() => null),
       ]);
     if (!tracksPayload.tracks.length) return;
     const nextTracks = tracksPayload.tracks.map(normalizeTrack);
@@ -1603,6 +1714,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       albumsPayload?.albums.length
         ? albumsPayload.albums.map(normalizeAlbum)
         : buildAlbumsFromTracks(nextTracks),
+    );
+    setLanguages(
+      languagesPayload?.languages.length
+        ? languagesPayload.languages.map(normalizeLanguage)
+        : buildLanguagesFromTracks(nextTracks),
     );
     setSelectedTrackId(nextTracks[0].id);
     setProgress(0);
@@ -1630,6 +1746,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void AsyncStorage.getItem(themeStorageKey).then((storedTheme) => {
       if (storedTheme === 'light' || storedTheme === 'dark') setThemeMode(storedTheme);
+    });
+  }, []);
+
+  useEffect(() => {
+    void AsyncStorage.getItem(downloadsStorageKey).then((stored) => {
+      if (stored) {
+        try { setDownloadedTrackIds(JSON.parse(stored) as string[]); } catch {}
+      }
     });
   }, []);
 
@@ -1896,6 +2020,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     singers,
     lyricists,
     albums,
+    languages,
     queueItems,
     selectedTrackId,
     selectedTrack,
@@ -1988,6 +2113,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     selectPlaylist,
     selectArtist,
     selectAlbum,
+    selectLanguage,
     selectSinger,
     selectLyricist,
     createPlaylist,
@@ -1998,6 +2124,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     removeTrackFromPlaylist,
     enqueueTrack,
     shareTrack,
+    downloadedTrackIds,
+    downloadTrack,
+    notifications,
+    dismissNotification,
     openTrackActionSheet,
     closeTrackActionSheet,
     goToActionArtist,
@@ -2027,5 +2157,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     updatePlaylistName,
   };
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+  return (
+    <AppContext.Provider value={value}>
+      {children}
+      {cropImage && (
+        <AvatarCropModal
+          imageUri={cropImage.uri}
+          imageWidth={cropImage.width}
+          imageHeight={cropImage.height}
+          onSave={handleCropSave}
+          onCancel={handleCropCancel}
+        />
+      )}
+    </AppContext.Provider>
+  );
 }

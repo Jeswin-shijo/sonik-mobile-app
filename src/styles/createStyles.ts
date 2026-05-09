@@ -431,6 +431,34 @@ export const createStyles = (theme: AppTheme) =>
       flex: 1,
       minHeight: 20,
     },
+    subTabBar: {
+      flexDirection: 'row',
+      gap: 6,
+      marginBottom: 12,
+      marginTop: 4,
+    },
+    subTab: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 7,
+      paddingHorizontal: 16,
+      borderRadius: 999,
+      borderWidth: 1.5,
+      borderColor: theme.border,
+      backgroundColor: 'transparent',
+    },
+    subTabActive: {
+      borderColor: theme.accent,
+      backgroundColor: 'rgba(245,193,93,0.12)',
+    },
+    subTabLabel: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: theme.muted,
+    },
+    subTabLabelActive: {
+      color: theme.accent,
+    },
     sectionHeader: {
       alignItems: 'center',
       flexDirection: 'row',

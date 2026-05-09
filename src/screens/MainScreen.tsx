@@ -11,6 +11,7 @@ import { SourceFilter } from '../components/SourceFilter';
 import { TrackActionSheet } from '../components/TrackActionSheet';
 import { TrackDetail } from '../components/TrackDetail';
 import { useAppContext } from '../context/AppContext';
+import { useIsOnline } from '../hooks/useIsOnline';
 import { FlowPanel } from '../panels/FlowPanel';
 import { LibraryPanel } from '../panels/LibraryPanel';
 import { ProfilePanel } from '../panels/ProfilePanel';
@@ -36,8 +37,12 @@ export function MainScreen() {
     handleLogout,
     isRefreshing,
     refreshLibrary,
+    setActivePanel,
+    notifications,
+    dismissNotification,
   } = useAppContext();
 
+  const isOnline = useIsOnline();
   const [logoutConfirmVisible, setLogoutConfirmVisible] = useState(false);
 
   return (
@@ -65,6 +70,18 @@ export function MainScreen() {
             </Pressable>
           </View>
         </View>
+
+        {/* Offline banner */}
+        {!isOnline && (
+          <Pressable
+            onPress={() => setActivePanel('library')}
+            style={sheet.offlineBanner}
+          >
+            <Ionicons color="#fff" name="cloud-offline-outline" size={16} />
+            <Text style={sheet.offlineBannerText}>You're offline</Text>
+            <Text style={sheet.offlineBannerLink}>View Downloads →</Text>
+          </Pressable>
+        )}
 
         {/* Scrollable content */}
         <ScrollView
@@ -143,6 +160,23 @@ export function MainScreen() {
             </Pressable>
           </Pressable>
         </Modal>
+
+        {/* Notification toasts */}
+        {notifications.length > 0 && (
+          <View style={sheet.toastStack} pointerEvents="box-none">
+            {notifications.map((n) => {
+              const kindBg = n.kind === 'success' ? '#1a7a4a' : n.kind === 'warning' ? '#a86c1a' : '#1a5fa8';
+              return (
+                <View key={n.id} style={[sheet.toast, { backgroundColor: kindBg }]}>
+                  <Text style={sheet.toastText} numberOfLines={2}>{n.message}</Text>
+                  <Pressable onPress={() => dismissNotification(n.id)} style={sheet.toastDismiss}>
+                    <Text style={sheet.toastDismissText}>✕</Text>
+                  </Pressable>
+                </View>
+              );
+            })}
+          </View>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -197,5 +231,58 @@ const sheet = StyleSheet.create({
   btnLabel: {
     fontSize: 15,
     fontWeight: '800',
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    backgroundColor: '#c0392b',
+  },
+  offlineBannerText: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  offlineBannerLink: {
+    color: 'rgba(255,255,255,0.85)',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  toastStack: {
+    position: 'absolute',
+    bottom: 100,
+    left: 16,
+    right: 16,
+    gap: 8,
+    zIndex: 9999,
+  },
+  toast: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  toastText: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  toastDismiss: {
+    padding: 4,
+  },
+  toastDismissText: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 13,
+    fontWeight: '700',
   },
 });

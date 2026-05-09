@@ -3,6 +3,7 @@ import type {
   Album,
   ApiAlbum,
   ApiArtist,
+  ApiLanguage,
   ApiLyricist,
   ApiPlaylist,
   ApiQueueItem,
@@ -10,6 +11,7 @@ import type {
   ApiTrack,
   Artist,
   CoverClass,
+  Language,
   Lyricist,
   MusicTrack,
   Playlist,
@@ -19,7 +21,7 @@ import type {
 
 export function resolveAvatarUrl(avatarUrl: string | null | undefined): string | null {
   if (!avatarUrl) return null;
-  if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) return avatarUrl;
+  if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://') || avatarUrl.startsWith('file://')) return avatarUrl;
   return `${apiBaseUrl}/uploads/avatars/${avatarUrl}`;
 }
 
@@ -67,6 +69,13 @@ export function normalizeAlbum(album: ApiAlbum): Album {
   return {
     ...album,
     tracks: album.tracks.map(normalizeTrack),
+  };
+}
+
+export function normalizeLanguage(language: ApiLanguage): Language {
+  return {
+    ...language,
+    tracks: language.tracks.map(normalizeTrack),
   };
 }
 

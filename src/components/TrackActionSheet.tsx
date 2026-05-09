@@ -23,6 +23,8 @@ export function TrackActionSheet() {
     goToActionAlbum,
     addTrackToPlaylist,
     createPlaylistAndAddCurrentTrack,
+    downloadTrack,
+    downloadedTrackIds,
   } = useAppContext();
 
   return (
@@ -93,6 +95,22 @@ export function TrackActionSheet() {
                   >
                     <Ionicons color={theme.text} name="add-circle-outline" size={20} />
                     <Text style={styles.actionSheetOptionText}>Save to playlist</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => {
+                      void downloadTrack(actionTrack.id);
+                      closeTrackActionSheet();
+                    }}
+                    style={styles.actionSheetOption}
+                  >
+                    <Ionicons
+                      color={downloadedTrackIds.includes(actionTrack.id) ? theme.secondary : theme.text}
+                      name={downloadedTrackIds.includes(actionTrack.id) ? 'checkmark-circle-outline' : 'download-outline'}
+                      size={20}
+                    />
+                    <Text style={styles.actionSheetOptionText}>
+                      {downloadedTrackIds.includes(actionTrack.id) ? 'Downloaded' : 'Download'}
+                    </Text>
                   </Pressable>
                 </View>
               ) : (

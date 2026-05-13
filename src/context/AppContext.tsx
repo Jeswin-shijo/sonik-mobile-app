@@ -252,6 +252,8 @@ export type AppContextValue = {
   // handlers
   t: (key: string) => string;
   handleLogin: () => Promise<void>;
+  handleGuestLogin: () => Promise<void>;
+  isGuest: boolean;
   handleResetPassword: () => Promise<void>;
   handleSendOtp: (purpose?: 'signup' | 'reset') => Promise<void>;
   handleVerifyOtpForSignup: () => Promise<void>;
@@ -1435,6 +1437,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  async function handleGuestLogin() {
+    clearFeedback();
+    setIsSubmitting(true);
+    try {
+      const payload = await requestJson<AuthResponse>('/auth/guest', { method: 'POST' });
+      await persistSession({ accessToken: payload.accessToken, tokenType: payload.tokenType, user: payload.user });
+    } catch (error) {
+      handleApiError(error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   async function handleResetPassword() {
     clearFeedback();
     setIsSubmitting(true);
@@ -2091,6 +2106,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     iconButtonColors,
     t,
     handleLogin,
+    handleGuestLogin,
+    isGuest: session?.user.role === 'guest',
     handleResetPassword,
     handleSendOtp,
     handleVerifyOtpForSignup,

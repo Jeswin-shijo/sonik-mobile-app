@@ -8,7 +8,7 @@ export type CoverClass = 'neon' | 'coast' | 'velvet' | 'summer' | 'blue';
 export type IconName = ComponentProps<typeof Ionicons>['name'];
 export type ThemeMode = 'dark' | 'light';
 
-export type UserRole = 'user';
+export type UserRole = 'user' | 'admin' | 'guest';
 
 export type SessionUser = {
   id: number;

@@ -35,6 +35,7 @@ export function AuthScreen() {
     selectedTrack,
     toggleThemeMode,
     handleLogin,
+    handleGuestLogin,
     handleSendOtp,
     handleVerifyOtpForSignup,
     handleVerifyOtpForPasswordReset,
@@ -167,6 +168,9 @@ export function AuthScreen() {
                 style={styles.textButton}
               >
                 <Text style={styles.textButtonLabel}>Don&apos;t have an account? Create one</Text>
+              </Pressable>
+              <Pressable disabled={isSubmitting} onPress={handleGuestLogin} style={styles.textButton}>
+                <Text style={styles.textButtonLabel}>Continue as Guest</Text>
               </Pressable>
             </>
           ) : null}

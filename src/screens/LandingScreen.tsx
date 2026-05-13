@@ -222,7 +222,7 @@ const noteConfigs = [
 ];
 
 export function LandingScreen() {
-  const { setView } = useAppContext();
+  const { handleGuestLogin, isSubmitting, setView } = useAppContext();
 
   const contentAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
@@ -285,10 +285,24 @@ export function LandingScreen() {
             </Pressable>
 
             <Pressable
-              style={({ pressed }) => [styles.btnSecondary, pressed && { opacity: 0.7 }]}
+              disabled={isSubmitting}
+              style={({ pressed }) => [
+                styles.btnSecondary,
+                isSubmitting && styles.btnDisabled,
+                pressed && !isSubmitting && { opacity: 0.7 },
+              ]}
+              onPress={handleGuestLogin}
+            >
+              <Text style={styles.btnSecondaryText}>
+                {isSubmitting ? 'Starting guest session' : 'Continue as Guest'}
+              </Text>
+            </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [styles.btnDismiss, pressed && { opacity: 0.7 }]}
               onPress={() => BackHandler.exitApp()}
             >
-              <Text style={styles.btnSecondaryText}>Dismiss</Text>
+              <Text style={styles.btnDismissText}>Dismiss</Text>
             </Pressable>
           </View>
         </Animated.View>
@@ -362,4 +376,10 @@ const styles = StyleSheet.create({
     borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.2)',
   },
   btnSecondaryText: { fontSize: 16, fontWeight: '700', color: 'rgba(255,255,255,0.85)', letterSpacing: 0.2 },
+  btnDismiss: {
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  btnDismissText: { fontSize: 15, fontWeight: '700', color: 'rgba(255,255,255,0.55)', letterSpacing: 0.2 },
+  btnDisabled: { opacity: 0.55 },
 });

@@ -1260,7 +1260,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (!track?.streamUrl) return;
     const FileSystem = await import('expo-file-system/legacy');
     const fullUrl = track.streamUrl.startsWith('http') ? track.streamUrl : `${apiBaseUrl}${track.streamUrl}`;
-    const fileName = `${track.title} - ${track.artist}.ogg`.replace(/[/\\?%*:|"<>]/g, '_');
+    const fileName = `${track.title} - ${track.artist}.mp3`.replace(/[/\\?%*:|"<>]/g, '_');
     const dest = `${FileSystem.documentDirectory}downloads/${fileName}`;
     await FileSystem.makeDirectoryAsync(`${FileSystem.documentDirectory}downloads`, { intermediates: true });
     const { status } = await FileSystem.downloadAsync(fullUrl, dest);
